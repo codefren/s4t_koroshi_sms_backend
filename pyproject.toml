@@ -1,0 +1,20 @@
+[project]
+name = "fastapi-hexagonal-odbc"
+version = "0.1.0"
+description = "FastAPI Hexagonal Architecture with ODBC and WebSockets"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "sqlalchemy",
+    "pydantic",
+    "pydantic-settings",
+    "pyodbc"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
