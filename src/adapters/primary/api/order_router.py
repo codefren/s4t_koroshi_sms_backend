@@ -12,7 +12,8 @@ from src.core.domain.models import (
     OrderListItem, 
     OrderDetailFull, 
     OrderProductDetail,
-    AssignOperatorRequest
+    AssignOperatorRequest,
+    UpdateOrderStatusRequest
 )
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -260,4 +261,102 @@ def assign_operator_to_order(
     db.refresh(order)
     
     # Retornar detalle actualizado de la orden
+    return get_order_detail(order_id, db)
+
+
+@router.put("/{order_id}/status", response_model=OrderDetailFull)
+def update_order_status(
+    order_id: int,
+    request: UpdateOrderStatusRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Actualiza el estado de una orden específica.
+    
+    **Parámetros:**
+    - `order_id`: ID de la orden
+    - `estado_codigo`: Código del nuevo estado (en el body)
+    - `notas`: Notas opcionales sobre el cambio (en el body)
+    
+    **Estados válidos:**
+    - `PENDING` - Pendiente
+    - `ASSIGNED` - Asignada
+    - `IN_PICKING` - En Picking
+    - `PICKED` - Picking Completado
+    - `PACKING` - En Empaque
+    - `READY` - Lista para Envío
+    - `SHIPPED` - Enviada
+    - `CANCELLED` - Cancelada
+    
+    **Acciones:**
+    - Actualiza el estado de la orden
+    - Registra fechas según el estado:
+      - `IN_PICKING`: Registra fecha_inicio_picking
+      - `PICKED`: Registra fecha_fin_picking
+    - Crea entrada en el historial
+    
+    **Retorna:**
+    - Detalle completo de la orden actualizada
+    """
+    # Buscar la orden
+    order = db.query(Order).filter(Order.id == order_id).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Orden con ID {order_id} no encontrada")
+    
+    # Verificar que el nuevo estado existe
+    new_status = db.query(OrderStatus).filter(
+        OrderStatus.codigo == request.estado_codigo.upper()
+    ).first()
+    
+    if not new_status:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Estado '{request.estado_codigo}' no es válido. Estados válidos: PENDING, ASSIGNED, IN_PICKING, PICKED, PACKING, READY, SHIPPED, CANCELLED"
+        )
+    
+    # Guardar estado anterior
+    status_anterior_id = order.status_id
+    old_status = db.query(OrderStatus).filter(OrderStatus.id == status_anterior_id).first()
+    
+    # No hacer nada si el estado es el mismo
+    if status_anterior_id == new_status.id:
+        return get_order_detail(order_id, db)
+    
+    # Actualizar el estado
+    order.status_id = new_status.id
+    
+    # Registrar fechas según el estado
+    now = datetime.now()
+    if request.estado_codigo.upper() == "IN_PICKING" and not order.fecha_inicio_picking:
+        order.fecha_inicio_picking = now
+    elif request.estado_codigo.upper() == "PICKED" and not order.fecha_fin_picking:
+        order.fecha_fin_picking = now
+    
+    # Crear entrada en historial
+    notas_historial = request.notas or f"Estado cambiado de {old_status.nombre if old_status else 'N/A'} a {new_status.nombre}"
+    
+    history = OrderHistory(
+        order_id=order.id,
+        status_id=new_status.id,
+        operator_id=order.operator_id,
+        accion="UPDATE_STATUS",
+        status_anterior=status_anterior_id,
+        status_nuevo=new_status.id,
+        notas=notas_historial,
+        fecha=now,
+        event_metadata={
+            "status_anterior_codigo": old_status.codigo if old_status else None,
+            "status_nuevo_codigo": new_status.codigo,
+            "status_anterior_nombre": old_status.nombre if old_status else None,
+            "status_nuevo_nombre": new_status.nombre
+        }
+    )
+    db.add(history)
+    
+    # Guardar cambios
+    db.commit()
+    db.refresh(order)
+    
+    # Retornar detalle actualizado
     return get_order_detail(order_id, db)

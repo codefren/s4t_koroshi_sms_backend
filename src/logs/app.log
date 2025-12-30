@@ -703,3 +703,67 @@ ubicacion
 2025-12-30 13:42:09 - uvicorn.access - INFO - 127.0.0.1:38714 - "GET /api/v1/orders/ HTTP/1.1" 200
 2025-12-30 13:42:19 - uvicorn.access - INFO - 127.0.0.1:38168 - "GET /api/v1/orders/ HTTP/1.1" 200
 2025-12-30 13:42:29 - uvicorn.access - INFO - 127.0.0.1:51752 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:42:39 - uvicorn.access - INFO - 127.0.0.1:47970 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:42:49 - uvicorn.access - INFO - 127.0.0.1:52996 - "OPTIONS /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:42:49 - uvicorn.access - INFO - 127.0.0.1:52996 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:42:59 - uvicorn.access - INFO - 127.0.0.1:54306 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:43:09 - uvicorn.access - INFO - 127.0.0.1:33810 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:43:19 - uvicorn.access - INFO - 127.0.0.1:57750 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:43:29 - uvicorn.access - INFO - 127.0.0.1:53396 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:43:39 - uvicorn.access - INFO - 127.0.0.1:52308 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:43:46 - uvicorn.error - INFO - Shutting down
+2025-12-30 13:43:47 - uvicorn.error - INFO - Waiting for application shutdown.
+2025-12-30 13:43:47 - uvicorn.error - INFO - Application shutdown complete.
+2025-12-30 13:43:47 - uvicorn.error - INFO - Finished server process [157384]
+2025-12-30 13:43:47 - root - INFO - Logging configured successfully.
+2025-12-30 13:43:47 - uvicorn.error - INFO - Application startup complete.
+2025-12-30 13:43:50 - uvicorn.access - INFO - 127.0.0.1:42992 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:43:59 - uvicorn.access - INFO - 127.0.0.1:34124 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:44:09 - uvicorn.access - INFO - 127.0.0.1:59084 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:44:15 - uvicorn.error - INFO - Shutting down
+2025-12-30 13:44:16 - uvicorn.error - INFO - Waiting for application shutdown.
+2025-12-30 13:44:16 - uvicorn.error - INFO - Application shutdown complete.
+2025-12-30 13:44:16 - uvicorn.error - INFO - Finished server process [188153]
+2025-12-30 13:44:16 - root - INFO - Logging configured successfully.
+2025-12-30 13:44:16 - uvicorn.error - INFO - Application startup complete.
+2025-12-30 13:44:19 - uvicorn.access - INFO - 127.0.0.1:42138 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:44:29 - uvicorn.access - INFO - 127.0.0.1:43468 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:44:39 - uvicorn.access - INFO - 127.0.0.1:35942 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:44:49 - uvicorn.access - INFO - 127.0.0.1:57534 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:44:59 - uvicorn.access - INFO - 127.0.0.1:60776 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:45:09 - uvicorn.access - INFO - 127.0.0.1:34644 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:45:19 - uvicorn.access - INFO - 127.0.0.1:53402 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:45:29 - uvicorn.access - INFO - 127.0.0.1:57826 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:45:39 - uvicorn.access - INFO - 127.0.0.1:34062 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:45:49 - uvicorn.access - INFO - 127.0.0.1:42230 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:45:59 - uvicorn.access - INFO - 127.0.0.1:38812 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:46:09 - uvicorn.access - INFO - 127.0.0.1:36610 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:46:19 - uvicorn.access - INFO - 127.0.0.1:40826 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:46:29 - uvicorn.access - INFO - 127.0.0.1:45470 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:46:39 - uvicorn.access - INFO - 127.0.0.1:35196 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:46:49 - uvicorn.access - INFO - 127.0.0.1:57180 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:46:59 - uvicorn.access - INFO - 127.0.0.1:35148 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:47:08 - uvicorn.access - INFO - 127.0.0.1:49382 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:47:08 - uvicorn.access - INFO - 127.0.0.1:49396 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49396 - "OPTIONS /api/v1/orders/5/ HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49382 - "OPTIONS /api/v1/operators?activo=true HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49412 - "OPTIONS /api/v1/orders/5/ HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49416 - "OPTIONS /api/v1/operators?activo=true HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49396 - "GET /api/v1/orders/5/ HTTP/1.1" 307
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49416 - "GET /api/v1/operators?activo=true HTTP/1.1" 307
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49412 - "GET /api/v1/orders/5/ HTTP/1.1" 307
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49396 - "OPTIONS /api/v1/orders/5 HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49416 - "GET /api/v1/operators?activo=true HTTP/1.1" 307
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49412 - "OPTIONS /api/v1/operators/?activo=true HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49382 - "OPTIONS /api/v1/orders/5 HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49428 - "OPTIONS /api/v1/operators/?activo=true HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49416 - "GET /api/v1/orders/5 HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49428 - "GET /api/v1/orders/5 HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49440 - "GET /api/v1/operators/?activo=true HTTP/1.1" 200
+2025-12-30 13:47:13 - uvicorn.access - INFO - 127.0.0.1:49442 - "GET /api/v1/operators/?activo=true HTTP/1.1" 200
+2025-12-30 13:47:44 - uvicorn.access - INFO - 127.0.0.1:47038 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:47:54 - uvicorn.access - INFO - 127.0.0.1:51714 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:48:04 - uvicorn.access - INFO - 127.0.0.1:33998 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:48:14 - uvicorn.access - INFO - 127.0.0.1:45818 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:48:24 - uvicorn.access - INFO - 127.0.0.1:48978 - "GET /api/v1/orders/ HTTP/1.1" 200
+2025-12-30 13:48:34 - uvicorn.access - INFO - 127.0.0.1:46524 - "GET /api/v1/orders/ HTTP/1.1" 200

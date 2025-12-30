@@ -119,6 +119,14 @@ class AssignOperatorRequest(BaseModel):
     operator_id: int = Field(description="ID del operario a asignar")
 
 
+class UpdateOrderStatusRequest(BaseModel):
+    """Modelo para solicitud de actualización de estado de orden."""
+    estado_codigo: str = Field(
+        description="Código del nuevo estado (PENDING, ASSIGNED, IN_PICKING, PICKED, PACKING, READY, SHIPPED, CANCELLED)"
+    )
+    notas: Optional[str] = Field(None, description="Notas opcionales sobre el cambio de estado")
+
+
 class OrderLineBase(BaseModel):
     """Modelo base para líneas de orden."""
     model_config = ConfigDict(from_attributes=True)
