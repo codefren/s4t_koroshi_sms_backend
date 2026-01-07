@@ -483,3 +483,190 @@ class PickingTask(Base):
         Index('idx_operator_secuencia', 'operator_id', 'secuencia'),
         Index('idx_estado_prioridad', 'estado', 'prioridad'),
     )
+
+
+# ============================================================================
+# MODELOS DE GESTIÓN DE PRODUCTOS Y UBICACIONES
+# ============================================================================
+
+class ProductReference(Base):
+    """
+    Catálogo de referencias de productos del almacén.
+    
+    Mantiene información maestra de productos identificados por una referencia
+    hexadecimal única. Cada producto puede estar almacenado en múltiples
+    ubicaciones del almacén (relación One-to-Many con ProductLocation).
+    
+    Esta tabla sirve como:
+    - Catálogo maestro de productos
+    - Validación de referencias en imports/órdenes
+    - Búsqueda rápida de información de producto
+    - Base para gestión de inventario multi-ubicación
+    
+    Ejemplo:
+    - Referencia: "A1B2C3"
+    - Nombre: "Camisa Polo Manga Corta"
+    - Color ID: "000001" (Rojo)
+    - Talla: "M"
+    - Ubicaciones: [Pasillo A-Altura 2, Pasillo B3-Altura 1]
+    """
+    __tablename__ = "product_references"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Referencia hexadecimal única del producto
+    # Código único que identifica este producto específico (color + talla)
+    # Ejemplo: "2A3F4B", "FF00AA", "A1B2C3"
+    # Validación: Solo caracteres hexadecimales [0-9A-Fa-f]
+    referencia = Column(String(50), unique=True, nullable=False, index=True)
+    
+    # Nombre descriptivo del producto
+    # Ejemplo: "Camisa Polo Manga Corta", "Pantalón Vaquero Slim"
+    nombre_producto = Column(String(200), nullable=False, index=True)
+    
+    # ID del color en el catálogo
+    # Puede ser numérico ("000001", "000002") o código ("RED", "BLUE")
+    # Se mantiene como string para flexibilidad
+    color_id = Column(String(50), nullable=False, index=True)
+    
+    # Talla del producto
+    # Ejemplos: "XS", "S", "M", "L", "XL", "XXL", "38", "40", "42"
+    talla = Column(String(20), nullable=False, index=True)
+    
+    # === INFORMACIÓN ADICIONAL OPCIONAL ===
+    
+    # Descripción legible del color (ej: "Rojo", "Azul Marino")
+    descripcion_color = Column(String(100), nullable=True)
+    
+    # Código de barras EAN del producto
+    ean = Column(String(50), nullable=True, index=True)
+    
+    # SKU o código interno del artículo
+    sku = Column(String(100), nullable=True, index=True)
+    
+    # Temporada del producto (ej: "Verano 2024", "Invierno 2025")
+    temporada = Column(String(50), nullable=True)
+    
+    # Si el producto está activo en el catálogo
+    # False = descontinuado o fuera de catálogo
+    activo = Column(Boolean, default=True, nullable=False, index=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    # Un producto puede estar en múltiples ubicaciones
+    locations = relationship("ProductLocation", back_populates="product", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        # Índice para búsquedas por color y talla
+        Index('idx_color_talla', 'color_id', 'talla'),
+        # Índice para búsqueda por nombre (autocomplete)
+        Index('idx_nombre_producto', 'nombre_producto'),
+        # Índice para productos activos
+        Index('idx_activo', 'activo'),
+        # Índice compuesto para búsquedas frecuentes
+        Index('idx_nombre_color_talla', 'nombre_producto', 'color_id', 'talla'),
+    )
+
+
+class ProductLocation(Base):
+    """
+    Ubicaciones físicas de productos en el almacén.
+    
+    Cada registro representa una ubicación específica donde se almacena
+    un producto. Un mismo producto puede estar en múltiples ubicaciones
+    para optimizar el picking (ej: producto muy demandado en varias zonas).
+    
+    La ubicación se estructura en:
+    - Pasillo: Identificador del pasillo (alfanumérico: "A", "B1", "C3")
+    - Lado: Izquierda o Derecha del pasillo
+    - Ubicacion: Posición específica en el lado (número o código)
+    - Altura: Nivel vertical (1=bajo, 2=medio, 3=alto, etc.)
+    
+    Además, cada ubicación tiene un stock mínimo configurado para
+    activar alertas de reposición.
+    
+    Ejemplo de ubicación completa:
+    - Pasillo: "A"
+    - Lado: "IZQUIERDA"
+    - Ubicacion: "12"
+    - Altura: 2
+    - Código resultante: "A-IZQ-12-H2"
+    - Stock mínimo: 10 unidades
+    """
+    __tablename__ = "product_locations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Producto al que pertenece esta ubicación
+    product_id = Column(Integer, ForeignKey("product_references.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # === COMPONENTES DE LA UBICACIÓN ===
+    
+    # Pasillo del almacén (alfanumérico)
+    # Ejemplos: "A", "B", "C", "A1", "B2", "C3", "AA", "BB"
+    # Permite letras, números y combinaciones
+    pasillo = Column(String(10), nullable=False, index=True)
+    
+    # Lado del pasillo: "IZQUIERDA" o "DERECHA"
+    # Se puede usar enum para mayor consistencia
+    # Valores permitidos: "IZQUIERDA", "DERECHA", "IZQ", "DER", "L", "R"
+    lado = Column(String(20), nullable=False, index=True)
+    
+    # Ubicación específica dentro del lado
+    # Puede ser número ("1", "2", "12") o alfanumérico ("A1", "B3")
+    ubicacion = Column(String(20), nullable=False, index=True)
+    
+    # Altura o nivel vertical
+    # Valores típicos: 1, 2, 3, 4, 5
+    # 1 = Nivel más bajo (fácil acceso)
+    # 5 = Nivel más alto (requiere escalera/elevador)
+    altura = Column(Integer, nullable=False, index=True)
+    
+    # === GESTIÓN DE STOCK ===
+    
+    # Stock mínimo que debe haber en esta ubicación
+    # Cuando el stock actual sea menor, se genera alerta de reposición
+    stock_minimo = Column(Integer, default=0, nullable=False)
+    
+    # Stock actual en esta ubicación específica (opcional)
+    # Puede actualizarse con sistema de inventario
+    stock_actual = Column(Integer, default=0, nullable=False)
+    
+    # === INFORMACIÓN ADICIONAL ===
+    
+    # Prioridad de esta ubicación para picking (1=alta, 5=baja)
+    # Ubicaciones con prioridad alta se usan primero
+    # Útil para optimizar rutas de picking
+    prioridad = Column(Integer, default=3, nullable=False)
+
+    # Si esta ubicación está activa/disponible
+    # False = ubicación en mantenimiento o bloqueada
+    activa = Column(Boolean, default=True, nullable=False, index=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    product = relationship("ProductReference", back_populates="locations")
+
+    __table_args__ = (
+        # Índice para búsquedas por pasillo
+        Index('idx_pasillo', 'pasillo'),
+        # Índice para búsquedas por lado
+        Index('idx_lado', 'lado'),
+        # Índice compuesto para ubicación completa
+        Index('idx_ubicacion_completa', 'pasillo', 'lado', 'ubicacion', 'altura'),
+        # Índice para stock bajo (alertas)
+        Index('idx_stock_bajo', 'stock_actual', 'stock_minimo'),
+        # Índice para ubicaciones activas con prioridad
+        Index('idx_activa_prioridad', 'activa', 'prioridad'),
+        # Asegurar que no haya ubicaciones duplicadas para el mismo producto
+        UniqueConstraint('product_id', 'pasillo', 'lado', 'ubicacion', 'altura', 
+                        name='uq_product_location'),
+    )
+
+    @property
+    def codigo_ubicacion(self):
+        return f"{self.pasillo}-{self.lado}-{self.ubicacion}-{self.altura}"

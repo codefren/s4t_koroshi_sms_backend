@@ -9,7 +9,8 @@ dependencies = [
     "sqlalchemy",
     "pydantic",
     "pydantic-settings",
-    "pyodbc"
+    "pyodbc",
+    "python-json-logger"
 ]
 
 [build-system]

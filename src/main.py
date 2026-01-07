@@ -4,6 +4,7 @@ from src.adapters.secondary.database.config import engine, Base
 from src.adapters.primary.api.router import router as item_router
 from src.adapters.primary.api.order_router import router as order_router
 from src.adapters.primary.api.operator_router import router as operator_router
+from src.adapters.primary.api.product_router import router as product_router
 from src.adapters.primary.api.websockets import ws_router
 
 # Create tables (for demo purposes)
@@ -31,6 +32,7 @@ app.add_middleware(
 app.include_router(item_router, prefix="/api/v1")
 app.include_router(order_router, prefix="/api/v1")
 app.include_router(operator_router, prefix="/api/v1")
+app.include_router(product_router, prefix="/api/v1")
 app.include_router(ws_router)
 
 @app.get("/health")

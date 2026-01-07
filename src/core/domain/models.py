@@ -127,6 +127,14 @@ class UpdateOrderStatusRequest(BaseModel):
     notas: Optional[str] = Field(None, description="Notas opcionales sobre el cambio de estado")
 
 
+class UpdateOrderPriorityRequest(BaseModel):
+    """Modelo para solicitud de actualización de prioridad de orden."""
+    prioridad: str = Field(
+        description="Nueva prioridad (NORMAL, HIGH, URGENT)"
+    )
+    notas: Optional[str] = Field(None, description="Notas opcionales sobre el cambio de prioridad")
+
+
 class OrderLineBase(BaseModel):
     """Modelo base para líneas de orden."""
     model_config = ConfigDict(from_attributes=True)
@@ -336,3 +344,158 @@ class PickingTaskDetailResponse(PickingTaskResponse):
     """Modelo de respuesta detallado con información de la orden."""
     order_line: Optional[OrderLineResponse] = None
     operator: Optional[OperatorResponse] = None
+
+
+# ============================================================================
+# MODELOS PYDANTIC PARA GESTIÓN DE PRODUCTOS Y UBICACIONES
+# ============================================================================
+
+class ProductReferenceBase(BaseModel):
+    """Modelo base para referencias de producto."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    referencia: str = Field(
+        ..., 
+        pattern=r'^[0-9A-Fa-f]+$',
+        min_length=1,
+        max_length=50,
+        description="Código hexadecimal único del producto (solo 0-9, A-F)"
+    )
+    nombre_producto: str = Field(
+        ..., 
+        min_length=1, 
+        max_length=200,
+        description="Nombre descriptivo del producto"
+    )
+    color_id: str = Field(
+        ..., 
+        max_length=50,
+        description="ID del color (numérico o alfanumérico)"
+    )
+    talla: str = Field(
+        ..., 
+        max_length=20,
+        description="Talla del producto (S, M, L, 38, 40, etc.)"
+    )
+    descripcion_color: Optional[str] = Field(None, max_length=100)
+    ean: Optional[str] = Field(None, max_length=50)
+    sku: Optional[str] = Field(None, max_length=100)
+    temporada: Optional[str] = Field(None, max_length=50)
+    activo: bool = True
+
+
+class ProductReferenceCreate(ProductReferenceBase):
+    """Modelo para crear referencia de producto."""
+    pass
+
+
+class ProductReferenceUpdate(BaseModel):
+    """Modelo para actualizar referencia de producto."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    nombre_producto: Optional[str] = Field(None, min_length=1, max_length=200)
+    color_id: Optional[str] = Field(None, max_length=50)
+    talla: Optional[str] = Field(None, max_length=20)
+    descripcion_color: Optional[str] = Field(None, max_length=100)
+    ean: Optional[str] = Field(None, max_length=50)
+    sku: Optional[str] = Field(None, max_length=100)
+    temporada: Optional[str] = Field(None, max_length=50)
+    activo: Optional[bool] = None
+
+
+class ProductReferenceResponse(ProductReferenceBase):
+    """Modelo de respuesta para referencia de producto."""
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProductLocationBase(BaseModel):
+    """Modelo base para ubicaciones de producto."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    pasillo: str = Field(
+        ..., 
+        max_length=10,
+        description="Identificador del pasillo (alfanumérico: A, B1, C3)"
+    )
+    lado: str = Field(
+        ..., 
+        max_length=20,
+        description="Lado del pasillo (IZQUIERDA, DERECHA, IZQ, DER, L, R)"
+    )
+    ubicacion: str = Field(
+        ..., 
+        max_length=20,
+        description="Posición específica en el lado"
+    )
+    altura: int = Field(
+        ..., 
+        ge=1, 
+        le=10,
+        description="Nivel vertical (1=bajo, 5=alto)"
+    )
+    stock_minimo: int = Field(
+        default=0, 
+        ge=0,
+        description="Stock mínimo para alerta de reposición"
+    )
+    stock_actual: int = Field(
+        default=0, 
+        ge=0,
+        description="Stock actual en esta ubicación"
+    )
+    prioridad: int = Field(
+        default=3, 
+        ge=1, 
+        le=5,
+        description="Prioridad para picking (1=alta, 5=baja)"
+    )
+    activa: bool = True
+
+
+class ProductLocationCreate(ProductLocationBase):
+    """Modelo para crear ubicación de producto (product_id viene en la URL)."""
+    pass
+
+
+class ProductLocationUpdate(BaseModel):
+    """Modelo para actualizar ubicación de producto."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    pasillo: Optional[str] = Field(None, max_length=10)
+    lado: Optional[str] = Field(None, max_length=20)
+    ubicacion: Optional[str] = Field(None, max_length=20)
+    altura: Optional[int] = Field(None, ge=1, le=10)
+    stock_minimo: Optional[int] = Field(None, ge=0)
+    stock_actual: Optional[int] = Field(None, ge=0)
+    prioridad: Optional[int] = Field(None, ge=1, le=5)
+    activa: Optional[bool] = None
+
+
+class ProductLocationResponse(ProductLocationBase):
+    """Modelo de respuesta para ubicación de producto."""
+    id: int
+    product_id: int
+    codigo_ubicacion: str = Field(
+        ...,
+        description="Código de ubicación generado automáticamente (propiedad computada)"
+    )
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProductReferenceWithLocations(ProductReferenceResponse):
+    """Modelo de respuesta para producto con sus ubicaciones."""
+    locations: List[ProductLocationResponse] = Field(
+        default=[],
+        description="Lista de ubicaciones donde está almacenado este producto"
+    )
+
+
+class ProductLocationWithProduct(ProductLocationResponse):
+    """Modelo de respuesta para ubicación con información del producto."""
+    product: Optional[ProductReferenceResponse] = Field(
+        None,
+        description="Información del producto en esta ubicación"
+    )

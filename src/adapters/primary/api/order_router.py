@@ -13,7 +13,8 @@ from src.core.domain.models import (
     OrderDetailFull, 
     OrderProductDetail,
     AssignOperatorRequest,
-    UpdateOrderStatusRequest
+    UpdateOrderStatusRequest,
+    UpdateOrderPriorityRequest
 )
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -350,6 +351,83 @@ def update_order_status(
             "status_nuevo_codigo": new_status.codigo,
             "status_anterior_nombre": old_status.nombre if old_status else None,
             "status_nuevo_nombre": new_status.nombre
+        }
+    )
+    db.add(history)
+    
+    # Guardar cambios
+    db.commit()
+    db.refresh(order)
+    
+    # Retornar detalle actualizado
+    return get_order_detail(order_id, db)
+
+
+@router.put("/{order_id}/priority", response_model=OrderDetailFull)
+def update_order_priority(
+    order_id: int,
+    request: UpdateOrderPriorityRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Actualiza la prioridad de una orden específica.
+    
+    **Parámetros:**
+    - `order_id`: ID de la orden
+    - `prioridad`: Nueva prioridad (en el body)
+    - `notas`: Notas opcionales sobre el cambio (en el body)
+    
+    **Prioridades válidas:**
+    - `NORMAL` - Prioridad normal
+    - `HIGH` - Prioridad alta
+    - `URGENT` - Prioridad urgente
+    
+    **Acciones:**
+    - Actualiza la prioridad de la orden
+    - Crea entrada en el historial
+    
+    **Retorna:**
+    - Detalle completo de la orden actualizada
+    """
+    # Buscar la orden
+    order = db.query(Order).filter(Order.id == order_id).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Orden con ID {order_id} no encontrada")
+    
+    # Validar prioridad
+    prioridad_upper = request.prioridad.upper()
+    if prioridad_upper not in ["NORMAL", "HIGH", "URGENT"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Prioridad '{request.prioridad}' no es válida. Prioridades válidas: NORMAL, HIGH, URGENT"
+        )
+    
+    # Guardar prioridad anterior
+    prioridad_anterior = order.prioridad
+    
+    # No hacer nada si la prioridad es la misma
+    if prioridad_anterior == prioridad_upper:
+        return get_order_detail(order_id, db)
+    
+    # Actualizar la prioridad
+    order.prioridad = prioridad_upper
+    
+    # Crear entrada en historial
+    notas_historial = request.notas or f"Prioridad cambiada de {prioridad_anterior} a {prioridad_upper}"
+    
+    history = OrderHistory(
+        order_id=order.id,
+        status_id=order.status_id,
+        operator_id=order.operator_id,
+        accion="UPDATE_PRIORITY",
+        status_anterior=None,
+        status_nuevo=None,
+        notas=notas_historial,
+        fecha=datetime.now(),
+        event_metadata={
+            "prioridad_anterior": prioridad_anterior,
+            "prioridad_nueva": prioridad_upper
         }
     )
     db.add(history)
