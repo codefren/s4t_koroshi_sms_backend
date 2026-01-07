@@ -23,7 +23,9 @@ from src.adapters.secondary.database.orm import (
     Order,
     OrderLine,
     OrderHistory,
-    InventoryItemModel  # La VIEW mapeada como InventoryItemModel
+    InventoryItemModel,  # La VIEW mapeada como InventoryItemModel
+    ProductReference,
+    ProductLocation
 )
 
 
@@ -37,6 +39,8 @@ class OrderETL:
             "new_orders": 0,
             "skipped_orders": 0,
             "lines_created": 0,
+            "lines_linked_product": 0,
+            "lines_linked_location": 0,
             "errors": 0
         }
     
@@ -69,6 +73,37 @@ class OrderETL:
         # Si no se puede parsear, usar fecha actual
         print(f"⚠️  No se pudo parsear fecha '{date_str}', usando fecha actual")
         return date.today()
+    
+    def find_product_reference(self, ean: str, sku: str) -> ProductReference:
+        """Busca un producto en el catálogo por EAN o SKU."""
+        product = None
+        
+        # Estrategia 1: Match por EAN (más confiable)
+        if ean and ean.strip():
+            product = self.db.query(ProductReference).filter(
+                ProductReference.ean == ean.strip()
+            ).first()
+        
+        # Estrategia 2: Match por SKU
+        if not product and sku and sku.strip():
+            product = self.db.query(ProductReference).filter(
+                ProductReference.sku == sku.strip()
+            ).first()
+        
+        return product
+    
+    def find_best_location(self, product_id: int) -> ProductLocation:
+        """Busca la mejor ubicación disponible para un producto."""
+        # Criterios: activa, prioridad alta, stock disponible
+        location = self.db.query(ProductLocation).filter(
+            ProductLocation.product_id == product_id,
+            ProductLocation.activa == True
+        ).order_by(
+            ProductLocation.prioridad.asc(),
+            ProductLocation.stock_actual.desc()
+        ).first()
+        
+        return location
     
     def fetch_view_data(self) -> List[Dict[str, Any]]:
         """
@@ -199,23 +234,45 @@ class OrderETL:
             
             # Crear las líneas de la orden
             for line_data in lines:
+                # Buscar producto en catálogo normalizado
+                product = self.find_product_reference(
+                    line_data.get("ean"),
+                    line_data.get("articulo")
+                )
+                
+                # Buscar mejor ubicación si se encontró el producto
+                location = None
+                ubicacion_str = line_data.get("ubicación")
+                
+                if product:
+                    location = self.find_best_location(product.id)
+                    # Usar ubicación real si existe
+                    if location:
+                        ubicacion_str = location.codigo_ubicacion
+                
                 order_line = OrderLine(
                     order_id=order.id,
-                    ean=line_data.get("ean"),
-                    ubicacion=line_data.get("ubicación"),
-                    articulo=line_data.get("articulo"),
-                    color=line_data.get("color"),
-                    talla=line_data.get("talla"),
-                    posicion_talla=line_data.get("posiciontalla"),
-                    descripcion_producto=line_data.get("descripcion producto"),
-                    descripcion_color=line_data.get("descripcion color"),
-                    temporada=line_data.get("temporada"),
+                    
+                    # === Referencias normalizadas ===
+                    product_reference_id=product.id if product else None,
+                    product_location_id=location.id if location else None,
+                    
+                    # === Datos mínimos ===
+                    ean=line_data.get("ean"),  # Solo para match rápido
+                    
+                    # === Cantidades y estado ===
                     cantidad_solicitada=int(line_data.get("cantidad", 0)),
                     cantidad_servida=int(line_data.get("servida", 0)),
                     estado="PENDING"
                 )
                 self.db.add(order_line)
                 self.stats["lines_created"] += 1
+                
+                # Actualizar contadores de vinculación
+                if product:
+                    self.stats["lines_linked_product"] += 1
+                if location:
+                    self.stats["lines_linked_location"] += 1
             
             # Crear entrada en historial
             history = OrderHistory(
@@ -295,7 +352,16 @@ class OrderETL:
         print(f"Órdenes nuevas:          {self.stats['new_orders']}")
         print(f"Órdenes saltadas:        {self.stats['skipped_orders']}")
         print(f"Líneas creadas:          {self.stats['lines_created']}")
-        print(f"Errores:                 {self.stats['errors']}")
+        
+        # Estadísticas de vinculación con productos
+        if self.stats['lines_created'] > 0:
+            link_rate = (self.stats['lines_linked_product'] / self.stats['lines_created']) * 100
+            loc_rate = (self.stats['lines_linked_location'] / self.stats['lines_created']) * 100
+            print(f"\n🔗 Vinculación con catálogo:")
+            print(f"  - Con productos:       {self.stats['lines_linked_product']} ({link_rate:.1f}%)")
+            print(f"  - Con ubicaciones:     {self.stats['lines_linked_location']} ({loc_rate:.1f}%)")
+        
+        print(f"\nErrores:                 {self.stats['errors']}")
         print("="*60)
         
         if self.stats["new_orders"] > 0:

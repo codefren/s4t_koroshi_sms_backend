@@ -261,34 +261,31 @@ class OrderLine(Base):
     # CASCADE: si se borra la orden, se borran todas sus líneas
     order_id = Column(Integer, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
     
-    # === DATOS DE PRODUCTO (desnormalizados) ===
-    # Código de barras EAN del producto - usado para escanear
+    # === REFERENCIAS NORMALIZADAS (Nueva Arquitectura) ===
+    # Referencia al producto en el catálogo normalizado
+    # NULL para órdenes históricas importadas antes de la normalización
+    # Permite consultar info actualizada del producto (nombre, activo, etc.)
+    product_reference_id = Column(
+        Integer, 
+        ForeignKey("product_references.id", ondelete="NO ACTION"), 
+        nullable=True, 
+        index=True
+    )
+    
+    # Referencia a la ubicación específica del producto en el almacén
+    # NULL para órdenes históricas
+    # Permite optimizar rutas de picking y validar stock en tiempo real
+    product_location_id = Column(
+        Integer, 
+        ForeignKey("product_locations.id", ondelete="NO ACTION"), 
+        nullable=True, 
+        index=True
+    )
+    
+    # === DATOS MÍNIMOS (para búsquedas rápidas) ===
+    # Código de barras EAN del producto - usado para escanear y match rápido
+    # Único campo desnormalizado que se mantiene por performance
     ean = Column(String(50), nullable=True, index=True)
-    
-    # Ubicación física en el almacén (ej: "A-12-3" = Pasillo A, Rack 12, Nivel 3)
-    # El operario usa esto para saber dónde ir a buscar el producto
-    ubicacion = Column(String(100), nullable=True, index=True)
-    
-    # Código del artículo (SKU interno)
-    articulo = Column(String(100), nullable=True, index=True)
-    
-    # Color del producto (ej: "Rojo", "Azul")
-    color = Column(String(100), nullable=True)
-    
-    # Talla del producto (ej: "M", "42", "XL")
-    talla = Column(String(50), nullable=True)
-    
-    # Posición de la talla en catálogo (usado para ordenamiento)
-    posicion_talla = Column(String(50), nullable=True)
-    
-    # Descripción legible del producto (ej: "Camisa Polo Manga Corta")
-    descripcion_producto = Column(Text, nullable=True)
-    
-    # Descripción del color (ej: "Rojo Vino")
-    descripcion_color = Column(String(200), nullable=True)
-    
-    # Temporada del producto (ej: "Verano 2024", "Invierno 2025")
-    temporada = Column(String(50), nullable=True)
     
     # === CANTIDADES ===
     # Cuántas unidades se pidieron de este producto
@@ -310,6 +307,10 @@ class OrderLine(Base):
     # Relationships
     order = relationship("Order", back_populates="order_lines")
     picking_tasks = relationship("PickingTask", back_populates="order_line", cascade="all, delete-orphan")
+    
+    # Relaciones con el catálogo normalizado de productos
+    product_reference = relationship("ProductReference", backref="order_lines")
+    product_location = relationship("ProductLocation", backref="order_lines")
 
     __table_args__ = (
         Index('idx_order_estado', 'order_id', 'estado'),
@@ -529,13 +530,20 @@ class ProductReference(Base):
     # Se mantiene como string para flexibilidad
     color_id = Column(String(50), nullable=False, index=True)
     
+    # Nombre corto del color (ej: "Rojo", "Azul", "Negro")
+    color = Column(String(100), nullable=True)
+    
     # Talla del producto
     # Ejemplos: "XS", "S", "M", "L", "XL", "XXL", "38", "40", "42"
     talla = Column(String(20), nullable=False, index=True)
     
+    # Posición de la talla en el catálogo (para ordenamiento)
+    # Ejemplo: "1", "2", "3" para ordenar XS < S < M < L
+    posicion_talla = Column(String(50), nullable=True)
+    
     # === INFORMACIÓN ADICIONAL OPCIONAL ===
     
-    # Descripción legible del color (ej: "Rojo", "Azul Marino")
+    # Descripción legible del color (ej: "Rojo Vino", "Azul Marino")
     descripcion_color = Column(String(100), nullable=True)
     
     # Código de barras EAN del producto

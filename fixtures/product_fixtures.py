@@ -31,6 +31,8 @@ def create_product(
     nombre_producto: str,
     color_id: str,
     talla: str,
+    color: Optional[str] = None,
+    posicion_talla: Optional[str] = None,
     descripcion_color: Optional[str] = None,
     ean: Optional[str] = None,
     sku: Optional[str] = None,
@@ -47,6 +49,8 @@ def create_product(
         nombre_producto: Nombre del producto
         color_id: ID del color
         talla: Talla del producto
+        color: Nombre corto del color (ej: "Rojo", "Azul")
+        posicion_talla: Posición para ordenamiento (opcional)
         descripcion_color: Descripción del color (opcional)
         ean: Código EAN (opcional)
         sku: SKU del producto (opcional)
@@ -61,7 +65,9 @@ def create_product(
         referencia=referencia,
         nombre_producto=nombre_producto,
         color_id=color_id,
+        color=color,
         talla=talla,
+        posicion_talla=posicion_talla,
         descripcion_color=descripcion_color,
         ean=ean,
         sku=sku,
@@ -195,7 +201,9 @@ def get_sample_products_data() -> List[dict]:
                 "referencia": "A1B2C3",
                 "nombre_producto": "Camisa Polo Manga Corta",
                 "color_id": "000001",
+                "color": "Rojo",
                 "talla": "M",
+                "posicion_talla": "3",
                 "descripcion_color": "Rojo",
                 "ean": "8445962763983",
                 "sku": "2523HA02",
@@ -228,7 +236,9 @@ def get_sample_products_data() -> List[dict]:
                 "referencia": "D4E5F6",
                 "nombre_producto": "Pantalón Vaquero Slim",
                 "color_id": "000010",
+                "color": "Azul",
                 "talla": "32",
+                "posicion_talla": "5",
                 "descripcion_color": "Azul Oscuro",
                 "ean": "8445962733320",
                 "sku": "2521PT18",
@@ -252,7 +262,9 @@ def get_sample_products_data() -> List[dict]:
                 "referencia": "7G8H9I",
                 "nombre_producto": "Camisa Polo Manga Corta",
                 "color_id": "000002",
+                "color": "Azul",
                 "talla": "L",
+                "posicion_talla": "4",
                 "descripcion_color": "Azul Marino",
                 "ean": "8445962763990",
                 "sku": "2523HA02",

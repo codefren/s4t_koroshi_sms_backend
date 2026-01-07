@@ -2,12 +2,20 @@
 Router para gestión de órdenes.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-from typing import List, Optional
+from sqlalchemy.orm import Session, joinedload
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 
 from src.adapters.secondary.database.config import get_db
-from src.adapters.secondary.database.orm import Order, OrderStatus, Operator, OrderLine, OrderHistory
+from src.adapters.secondary.database.orm import (
+    Order, 
+    OrderStatus, 
+    Operator, 
+    OrderLine, 
+    OrderHistory,
+    ProductReference,
+    ProductLocation
+)
 from src.core.domain.models import (
     OrderListItem, 
     OrderDetailFull, 
@@ -120,8 +128,11 @@ def get_order_detail(
       - Cantidades solicitadas y servidas
       - Estado de la línea
     """
-    # Buscar la orden
-    order = db.query(Order).filter(Order.id == order_id).first()
+    # Buscar la orden con eager loading de relaciones
+    order = db.query(Order).options(
+        joinedload(Order.order_lines).joinedload(OrderLine.product_reference),
+        joinedload(Order.order_lines).joinedload(OrderLine.product_location)
+    ).filter(Order.id == order_id).first()
     
     if not order:
         raise HTTPException(status_code=404, detail=f"Orden con ID {order_id} no encontrada")
@@ -134,21 +145,25 @@ def get_order_detail(
     if order.operator_id:
         operator = db.query(Operator).filter(Operator.id == order.operator_id).first()
     
-    # Obtener todas las líneas de la orden
-    order_lines = db.query(OrderLine).filter(OrderLine.order_id == order_id).all()
+    # Las líneas ya están cargadas por el joinedload
+    order_lines = order.order_lines
     
-    # Construir lista de productos
+    # Construir lista de productos usando las relaciones
     productos = []
     for line in order_lines:
+        # Obtener datos desde las relaciones (normalizadas)
+        product = line.product_reference
+        location = line.product_location
+        
         producto = OrderProductDetail(
             id=line.id,
-            nombre=line.descripcion_producto,
-            descripcion=line.descripcion_color,
-            color=line.color,
-            talla=line.talla,
-            ubicacion=line.ubicacion if line.ubicacion else "Sin ubicación",
-            sku=line.articulo,
-            ean=line.ean,
+            nombre=product.nombre_producto if product else "Producto no vinculado",
+            descripcion=product.descripcion_color if product else "",
+            color=product.color if product else "",
+            talla=product.talla if product else "",
+            ubicacion=location.codigo_ubicacion if location else "Sin ubicación",
+            sku=product.sku if product else "",
+            ean=line.ean,  # Se mantiene en OrderLine para match rápido
             cantidad_solicitada=line.cantidad_solicitada,
             cantidad_servida=line.cantidad_servida,
             estado=line.estado
@@ -438,3 +453,170 @@ def update_order_priority(
     
     # Retornar detalle actualizado
     return get_order_detail(order_id, db)
+
+
+@router.post("/{order_id}/optimize-picking-route")
+def optimize_picking_route(
+    order_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Optimiza la ruta de picking para una orden usando ubicaciones reales.
+    
+    **Algoritmo:**
+    1. Agrupa líneas por pasillo
+    2. Ordena por prioridad + altura dentro de cada pasillo
+    3. Genera secuencia optimizada
+    
+    **Retorna:**
+    - Ruta optimizada con secuencia de recogida
+    - Pasillos a visitar
+    - Tiempo estimado
+    """
+    order = db.query(Order).options(
+        joinedload(Order.order_lines).joinedload(OrderLine.product_location)
+    ).filter(Order.id == order_id).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Orden con ID {order_id} no encontrada")
+    
+    if not order.order_lines:
+        raise HTTPException(status_code=400, detail="La orden no tiene líneas de productos")
+    
+    lines_by_aisle: Dict[str, List[OrderLine]] = {}
+    lines_without_location = []
+    
+    for line in order.order_lines:
+        if line.product_location and line.product_location.activa:
+            pasillo = line.product_location.pasillo
+            if pasillo not in lines_by_aisle:
+                lines_by_aisle[pasillo] = []
+            lines_by_aisle[pasillo].append(line)
+        else:
+            product_name = line.product_reference.nombre_producto if line.product_reference else "Producto desconocido"
+            lines_without_location.append({
+                "line_id": line.id,
+                "producto": product_name,
+                "ean": line.ean
+            })
+    
+    picking_route = []
+    secuencia = 1
+    
+    for pasillo in sorted(lines_by_aisle.keys()):
+        sorted_lines = sorted(
+            lines_by_aisle[pasillo],
+            key=lambda x: (x.product_location.prioridad, x.product_location.altura)
+        )
+        
+        for line in sorted_lines:
+            loc = line.product_location
+            product = line.product_reference
+            producto_nombre = product.nombre_producto if product else "Producto desconocido"
+            
+            picking_route.append({
+                "secuencia": secuencia,
+                "order_line_id": line.id,
+                "producto": producto_nombre,
+                "cantidad": line.cantidad_solicitada,
+                "ubicacion": loc.codigo_ubicacion,
+                "pasillo": loc.pasillo,
+                "lado": loc.lado,
+                "altura": loc.altura,
+                "prioridad": loc.prioridad,
+                "stock_disponible": loc.stock_actual
+            })
+            secuencia += 1
+    
+    return {
+        "order_id": order_id,
+        "numero_orden": order.numero_orden,
+        "total_stops": len(picking_route),
+        "aisles_to_visit": sorted(lines_by_aisle.keys()),
+        "estimated_time_minutes": round(len(picking_route) * 1.5, 1),
+        "picking_route": picking_route,
+        "warnings": {
+            "lines_without_location": len(lines_without_location),
+            "details": lines_without_location if lines_without_location else []
+        }
+    }
+
+
+@router.get("/{order_id}/stock-validation")
+def validate_order_stock(
+    order_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Valida si hay stock suficiente para completar la orden.
+    
+    **Verifica:**
+    - Stock disponible vs cantidad solicitada
+    - Ubicaciones activas
+    - Productos vinculados al catálogo
+    """
+    order = db.query(Order).options(
+        joinedload(Order.order_lines).joinedload(OrderLine.product_location),
+        joinedload(Order.order_lines).joinedload(OrderLine.product_reference)
+    ).filter(Order.id == order_id).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Orden con ID {order_id} no encontrada")
+    
+    validation_results = []
+    has_issues = False
+    issues_count = {"insufficient_stock": 0, "no_location": 0, "inactive_product": 0, "inactive_location": 0}
+    
+    for line in order.order_lines:
+        product = line.product_reference
+        producto_nombre = product.nombre_producto if product else "Producto desconocido"
+        
+        result: Dict[str, Any] = {
+            "order_line_id": line.id,
+            "producto": producto_nombre,
+            "cantidad_solicitada": line.cantidad_solicitada,
+            "issues": []
+        }
+        
+        if not line.product_location:
+            result["issues"].append({"type": "no_location", "message": "No hay ubicación vinculada", "severity": "warning"})
+            result["stock_disponible"] = None
+            result["ubicacion"] = "Sin ubicación"
+            has_issues = True
+            issues_count["no_location"] += 1
+        else:
+            loc = line.product_location
+            result["stock_disponible"] = loc.stock_actual
+            result["ubicacion"] = loc.codigo_ubicacion
+            
+            if loc.stock_actual < line.cantidad_solicitada:
+                result["issues"].append({
+                    "type": "insufficient_stock",
+                    "message": f"Stock insuficiente: {loc.stock_actual} disponible, {line.cantidad_solicitada} solicitado",
+                    "severity": "error"
+                })
+                has_issues = True
+                issues_count["insufficient_stock"] += 1
+            
+            if not loc.activa:
+                result["issues"].append({"type": "inactive_location", "message": "La ubicación está inactiva", "severity": "warning"})
+                has_issues = True
+                issues_count["inactive_location"] += 1
+        
+        if line.product_reference and not line.product_reference.activo:
+            result["issues"].append({"type": "inactive_product", "message": "El producto está inactivo", "severity": "warning"})
+            has_issues = True
+            issues_count["inactive_product"] += 1
+        
+        result["can_pick"] = len(result["issues"]) == 0
+        validation_results.append(result)
+    
+    return {
+        "order_id": order_id,
+        "numero_orden": order.numero_orden,
+        "can_complete": not has_issues,
+        "total_lines": len(order.order_lines),
+        "lines_with_issues": sum(1 for r in validation_results if not r["can_pick"]),
+        "summary": issues_count,
+        "validation_results": validation_results
+    }
