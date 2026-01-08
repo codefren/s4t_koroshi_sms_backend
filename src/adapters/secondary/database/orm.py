@@ -213,12 +213,14 @@ class Order(Base):
     prioridad = Column(String(20), default='NORMAL', nullable=False, index=True)
     
     # === CONTADORES (desnormalizados para performance) ===
-    # Total de líneas/items en la orden
-    # Se calcula al importar y evita hacer COUNT(*) constantemente
+    # Total de UNIDADES solicitadas en la orden (suma de cantidad_solicitada de todas las líneas)
+    # Ejemplo: 3 líneas con cantidades [5, 10, 3] = total_items: 18
+    # Se calcula al importar y evita hacer SUM(cantidad_solicitada) constantemente
     total_items = Column(Integer, default=0, nullable=False)
     
-    # Cuántas líneas han sido completamente recogidas
-    # Permite calcular progreso rápidamente: items_completados/total_items
+    # Cuántas UNIDADES han sido servidas hasta ahora (suma de cantidad_servida de todas las líneas)
+    # Ejemplo: 3 líneas con cantidades servidas [5, 7, 3] = items_completados: 15
+    # Permite calcular progreso rápidamente: items_completados/total_items * 100
     items_completados = Column(Integer, default=0, nullable=False)
     
     # === METADATOS ===

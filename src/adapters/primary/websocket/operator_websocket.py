@@ -195,11 +195,11 @@ async def handle_scan_product(
         elif line.cantidad_servida > 0:
             line.estado = "PARTIAL"
         
-        # 7. Actualizar contador de items completados de la orden
-        items_completados = db.query(OrderLine).filter(
-            OrderLine.order_id == order.id,
-            OrderLine.estado == "COMPLETED"
-        ).count()
+        # 7. Actualizar contador de items completados de la orden (suma de unidades servidas)
+        from sqlalchemy import func
+        items_completados = db.query(func.sum(OrderLine.cantidad_servida)).filter(
+            OrderLine.order_id == order.id
+        ).scalar() or 0
         
         order.items_completados = items_completados
         

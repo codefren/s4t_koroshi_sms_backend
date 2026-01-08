@@ -230,7 +230,9 @@ class OrderListItem(BaseModel):
     numero_orden: str
     cliente: str
     nombre_cliente: Optional[str] = None
-    total_items: int
+    total_items: int = Field(description="Total de unidades solicitadas")
+    items_completados: int = Field(default=0, description="Total de unidades servidas")
+    progreso: float = Field(default=0.0, description="Porcentaje de progreso (0-100)")
     operario_asignado: Optional[str] = Field(default="Sin asignar", description="Nombre del operario o 'Sin asignar'")
     prioridad: str
     estado: str = Field(description="Nombre del estado de la orden")

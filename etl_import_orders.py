@@ -217,6 +217,9 @@ class OrderETL:
             # Tomar datos de la primera línea (son iguales en todas las líneas)
             first_line = lines[0]
             
+            # Calcular total de unidades solicitadas (suma de cantidades, no conteo de líneas)
+            total_unidades = sum(int(line.get("cantidad", 0)) for line in lines)
+            
             # Crear la orden
             order = Order(
                 numero_orden=numero_orden,
@@ -225,7 +228,7 @@ class OrderETL:
                 status_id=self.get_status_id("PENDING"),
                 fecha_orden=self.parse_date(first_line.get("fecha")),
                 fecha_importacion=datetime.now(),
-                total_items=len(lines),
+                total_items=total_unidades,
                 prioridad="NORMAL"
             )
             
@@ -280,8 +283,8 @@ class OrderETL:
                 status_id=order.status_id,
                 accion="IMPORTED_FROM_VIEW",
                 fecha=datetime.now(),
-                notas=f"Orden importada desde VIEW con {len(lines)} líneas",
-                event_metadata={"source": "etl_import_orders.py"}
+                notas=f"Orden importada desde VIEW con {len(lines)} líneas ({total_unidades} unidades totales)",
+                event_metadata={"source": "etl_import_orders.py", "total_lineas": len(lines), "total_unidades": total_unidades}
             )
             self.db.add(history)
             

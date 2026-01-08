@@ -42,7 +42,9 @@ def list_orders(
     **Incluye:**
     - Número de orden
     - Cliente
-    - Cantidad total de items
+    - Total de unidades solicitadas (total_items)
+    - Total de unidades servidas (items_completados)
+    - Progreso en porcentaje (0-100%)
     - Operario asignado (o "Sin asignar")
     - Prioridad
     - Estado
@@ -54,6 +56,7 @@ def list_orders(
         Order.cliente,
         Order.nombre_cliente,
         Order.total_items,
+        Order.items_completados,
         Order.prioridad,
         Order.fecha_orden,
         Order.fecha_importacion,
@@ -85,12 +88,19 @@ def list_orders(
     # Transformar resultados a modelo Pydantic
     orders = []
     for row in results:
+        # Calcular progreso
+        progreso = 0.0
+        if row.total_items > 0:
+            progreso = round((row.items_completados / row.total_items) * 100, 2)
+        
         order_data = {
             "id": row.id,
             "numero_orden": row.numero_orden,
             "cliente": row.cliente,
             "nombre_cliente": row.nombre_cliente,
             "total_items": row.total_items,
+            "items_completados": row.items_completados,
+            "progreso": progreso,
             "operario_asignado": row.operario_nombre if row.operario_nombre else "Sin asignar",
             "prioridad": row.prioridad,
             "estado": row.estado,
