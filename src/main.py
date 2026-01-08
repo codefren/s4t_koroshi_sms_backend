@@ -6,6 +6,7 @@ from src.adapters.primary.api.order_router import router as order_router
 from src.adapters.primary.api.operator_router import router as operator_router
 from src.adapters.primary.api.product_router import router as product_router
 from src.adapters.primary.api.websockets import ws_router
+from src.adapters.primary.websocket.operator_websocket import router as operator_ws_router
 
 # Create tables (for demo purposes)
 Base.metadata.create_all(bind=engine)
@@ -34,6 +35,7 @@ app.include_router(order_router, prefix="/api/v1")
 app.include_router(operator_router, prefix="/api/v1")
 app.include_router(product_router, prefix="/api/v1")
 app.include_router(ws_router)
+app.include_router(operator_ws_router, tags=["WebSocket PDA"])
 
 @app.get("/health")
 def health_check():

@@ -231,6 +231,7 @@ def list_products(
             sku=product.sku or product.referencia,
             name=product.nombre_producto,
             category=product.descripcion_color or "Sin categoría",
+            talla=product.talla,
             image=None,  # TODO: Agregar soporte para imágenes
             locations=_format_locations_for_list(product.locations),
             stock=stock,

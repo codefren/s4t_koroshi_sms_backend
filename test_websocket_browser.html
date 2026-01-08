@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDA WebSocket Test</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        
+        .status.disconnected {
+            background: #ef4444;
+        }
+        
+        .status.connected {
+            background: #10b981;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #374151;
+        }
+        
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-bottom: 10px;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        button.disconnect {
+            background: #ef4444;
+        }
+        
+        .messages {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f9fafb;
+            border-radius: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .messages h3 {
+            margin-bottom: 15px;
+            color: #374151;
+        }
+        
+        .message {
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .message.success {
+            background: #d1fae5;
+            border-left: 4px solid #10b981;
+        }
+        
+        .message.error {
+            background: #fee2e2;
+            border-left: 4px solid #ef4444;
+        }
+        
+        .message.info {
+            background: #dbeafe;
+            border-left: 4px solid #3b82f6;
+        }
+        
+        .progress {
+            margin-top: 10px;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📱 PDA WebSocket Test</h1>
+            <div class="status disconnected" id="status">🔴 Desconectado</div>
+        </div>
+        
+        <div class="content">
+            <div class="form-group">
+                <label>👤 Código Operario</label>
+                <input type="text" id="codigoOperario" value="OP001" placeholder="Ej: OP001">
+            </div>
+            
+            <div class="form-group">
+                <label>📦 Número de Orden</label>
+                <input type="text" id="numeroOrden" value="ORD1001" placeholder="Ej: ORD1001, 1111087088">
+            </div>
+            
+            <div class="form-group">
+                <label>🔍 Código EAN</label>
+                <input type="text" id="ean" placeholder="Ej: 8445962763983">
+            </div>
+            
+            <button id="connectBtn" onclick="connect()">🔌 Conectar</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled class="disconnect">❌ Desconectar</button>
+            <button id="scanBtn" onclick="scan()" disabled>📸 Escanear Producto</button>
+            
+            <div class="messages" id="messages">
+                <h3>📨 Mensajes</h3>
+                <div id="messageList"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let ws = null;
+        
+        const statusEl = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const scanBtn = document.getElementById('scanBtn');
+        const messageList = document.getElementById('messageList');
+        
+        function addMessage(text, type = 'info') {
+            const msg = document.createElement('div');
+            msg.className = `message ${type}`;
+            msg.innerHTML = text;
+            messageList.insertBefore(msg, messageList.firstChild);
+        }
+        
+        function updateStatus(connected) {
+            if (connected) {
+                statusEl.textContent = '🟢 Conectado';
+                statusEl.className = 'status connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                scanBtn.disabled = false;
+            } else {
+                statusEl.textContent = '🔴 Desconectado';
+                statusEl.className = 'status disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                scanBtn.disabled = true;
+            }
+        }
+        
+        function connect() {
+            const codigoOperario = document.getElementById('codigoOperario').value;
+            
+            if (!codigoOperario) {
+                alert('Por favor ingresa el código del operario');
+                return;
+            }
+            
+            const url = `ws://localhost:8000/ws/operators/${codigoOperario}`;
+            addMessage(`🔌 Conectando a ${url}...`, 'info');
+            
+            ws = new WebSocket(url);
+            
+            ws.onopen = () => {
+                updateStatus(true);
+                addMessage('✅ Conexión establecida', 'success');
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('📨 Mensaje recibido:', data);
+                
+                if (data.action === 'connected') {
+                    addMessage(`👤 ${data.data.message}`, 'success');
+                } 
+                else if (data.action === 'scan_confirmed') {
+                    const d = data.data;
+                    const html = `
+                        <strong>✅ ${d.mensaje}</strong><br>
+                        📦 <strong>${d.producto}</strong><br>
+                        🔢 Cantidad: ${d.cantidad_actual}/${d.cantidad_solicitada} (${d.progreso_linea}%)<br>
+                        📊 Orden: ${d.progreso_orden.items_completados}/${d.progreso_orden.total_items} items
+                        <div class="progress">
+                            Progreso Total: ${d.progreso_orden.progreso_porcentaje}%
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${d.progreso_orden.progreso_porcentaje}%"></div>
+                            </div>
+                        </div>
+                    `;
+                    addMessage(html, 'success');
+                    
+                    // Sonido de éxito (opcional)
+                    playBeep();
+                } 
+                else if (data.action === 'scan_error') {
+                    const d = data.data;
+                    addMessage(`❌ <strong>Error:</strong> ${d.message}<br>Código: ${d.error_code}`, 'error');
+                    
+                    // Sonido de error (opcional)
+                    playErrorBeep();
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                addMessage('❌ Error en la conexión', 'error');
+            };
+            
+            ws.onclose = () => {
+                updateStatus(false);
+                addMessage('🔴 Conexión cerrada', 'info');
+            };
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function scan() {
+            const numeroOrden = document.getElementById('numeroOrden').value.trim();
+            const ean = document.getElementById('ean').value.trim();
+            
+            if (!numeroOrden) {
+                alert('Por favor ingresa el número de orden');
+                return;
+            }
+            
+            if (!ean) {
+                alert('Por favor ingresa el código EAN');
+                return;
+            }
+            
+            const message = {
+                action: 'scan_product',
+                data: {
+                    numero_orden: numeroOrden,
+                    ean: ean,
+                    ubicacion: 'A-IZQ-12-H2'
+                }
+            };
+            
+            addMessage(`📸 Escaneando EAN: ${ean}...`, 'info');
+            ws.send(JSON.stringify(message));
+            
+            // Limpiar input para siguiente escaneo
+            document.getElementById('ean').value = '';
+            document.getElementById('ean').focus();
+        }
+        
+        // Permitir escanear con Enter
+        document.getElementById('ean').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !scanBtn.disabled) {
+                scan();
+            }
+        });
+        
+        // Sonidos (opcionales)
+        function playBeep() {
+            const audio = new AudioContext();
+            const oscillator = audio.createOscillator();
+            const gainNode = audio.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audio.destination);
+            
+            oscillator.frequency.value = 800;
+            oscillator.type = 'sine';
+            
+            gainNode.gain.setValueAtTime(0.3, audio.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audio.currentTime + 0.1);
+            
+            oscillator.start(audio.currentTime);
+            oscillator.stop(audio.currentTime + 0.1);
+        }
+        
+        function playErrorBeep() {
+            const audio = new AudioContext();
+            const oscillator = audio.createOscillator();
+            const gainNode = audio.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audio.destination);
+            
+            oscillator.frequency.value = 300;
+            oscillator.type = 'sawtooth';
+            
+            gainNode.gain.setValueAtTime(0.3, audio.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audio.currentTime + 0.3);
+            
+            oscillator.start(audio.currentTime);
+            oscillator.stop(audio.currentTime + 0.3);
+        }
+    </script>
+</body>
+</html>

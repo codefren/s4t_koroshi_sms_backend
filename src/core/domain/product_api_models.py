@@ -63,6 +63,7 @@ class ProductListItem(BaseModel):
     # Información básica
     name: str = Field(..., description="Nombre del producto")
     category: str = Field(..., description="Categoría del producto")
+    talla: Optional[str] = Field(None, description="Talla del producto (XS, S, M, L, XL, etc.)")
     image: Optional[str] = Field(
         None,
         description="URL de la imagen del producto"
@@ -71,7 +72,6 @@ class ProductListItem(BaseModel):
     # Ubicaciones (máximo 2-3, luego "+X más")
     locations: List[LocationItem] = Field(
         default=[],
-        description="Lista de ubicaciones (limitada a primeras 2-3 + indicador)"
     )
     
     # Stock

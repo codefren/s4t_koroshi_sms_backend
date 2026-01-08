@@ -9,7 +9,7 @@ class InventoryItemModel(Base):
 
     id = Column(Integer, primary_key=True, index=True) # Adding an internal ID since the CSV doesn't seem to have a unique PK, or EAN isn't unique enough?
     ean = Column(String(50), index=True)
-    ubicacion = Column(String)
+    ubicacion = Column(String)# deprecated
     articulo = Column(String)
     color = Column(String)
     talla = Column(String)
