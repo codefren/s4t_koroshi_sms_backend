@@ -44,7 +44,7 @@ async def operator_websocket_endpoint(
     from ...secondary.database.config import SessionLocal
     db = SessionLocal()
     try:
-        operator = db.query(Operator).filter_by(codigo_operario=codigo_operario).first()
+        operator = db.query(Operator).filter_by(codigo=codigo_operario).first()
         
         if not operator:
             await websocket.close(code=4004, reason="Operario no encontrado")

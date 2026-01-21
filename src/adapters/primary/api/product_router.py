@@ -183,7 +183,7 @@ def list_products(
             or_(
                 ProductReference.nombre_producto.ilike(search_pattern),
                 ProductReference.sku.ilike(search_pattern),
-                ProductReference.descripcion_color.ilike(search_pattern),
+                ProductReference.color.ilike(search_pattern),
                 ProductReference.referencia.ilike(search_pattern)
             )
         )
@@ -230,7 +230,7 @@ def list_products(
             id=product.id,
             sku=product.sku or product.referencia,
             name=product.nombre_producto,
-            category=product.descripcion_color or "Sin categoría",
+            category=product.color or "Sin categoría",
             talla=product.talla,
             image=None,  # TODO: Agregar soporte para imágenes
             locations=_format_locations_for_list(product.locations),
@@ -300,8 +300,8 @@ def get_product(
         nombre_producto=product.nombre_producto,
         name=product.nombre_producto,
         color_id=product.color_id,
-        descripcion_color=product.descripcion_color,
-        category=product.descripcion_color,
+        descripcion_color=product.color,
+        category=product.color,
         talla=product.talla,
         ean=product.ean,
         temporada=product.temporada,

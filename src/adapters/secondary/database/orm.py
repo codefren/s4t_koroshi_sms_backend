@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, Boolean, Text, DateTime, Date, ForeignKey, JSON, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
+from sqlalchemy.ext.hybrid import hybrid_property
 from datetime import datetime
 from src.adapters.secondary.database.config import Base
 
@@ -73,7 +74,7 @@ class OrderStatus(Base):
     activo = Column(Boolean, default=True, nullable=False, index=True)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    # updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)  # Columna no existe en DB
 
     # Relationships
     orders = relationship("Order", back_populates="status", foreign_keys="Order.status_id")
@@ -94,7 +95,7 @@ class Operator(Base):
     
     # Código único del operario (ej: OP001, OP002)
     # Puede venir del sistema de nómina o ser asignado internamente
-    codigo_operario = Column(String(50), unique=True, nullable=False, index=True)
+    codigo = Column(String(50), unique=True, nullable=False, index=True)  # Columna no existe en DB
     
     # Nombre completo del operario para identificación
     nombre = Column(String(100), nullable=False)
@@ -103,8 +104,13 @@ class Operator(Base):
     # False si está de vacaciones, incapacitado, o ya no trabaja
     activo = Column(Boolean, default=True, nullable=False, index=True)
     
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)  # Columna no existe en DB
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)  # Columna no existe en DB
+
+    @hybrid_property
+    def codigo_operario(self):
+        """Alias para codigo para mantener compatibilidad con código existente."""
+        return self.codigo
 
     # Relationships
     orders = relationship("Order", back_populates="operator")

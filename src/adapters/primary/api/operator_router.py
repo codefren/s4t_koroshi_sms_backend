@@ -94,7 +94,7 @@ def create_operator(
     """
     # Verificar que el código de operario no exista
     existing_operator = db.query(Operator).filter(
-        Operator.codigo_operario == operator_data.codigo_operario
+        Operator.codigo == operator_data.codigo_operario
     ).first()
     
     if existing_operator:
@@ -105,7 +105,7 @@ def create_operator(
     
     # Crear nuevo operario
     new_operator = Operator(
-        codigo_operario=operator_data.codigo_operario,
+        codigo=operator_data.codigo_operario,
         nombre=operator_data.nombre,
         activo=operator_data.activo
     )
@@ -220,7 +220,7 @@ def list_operator_orders(
     - Lista de órdenes con información básica
     """
     # Buscar operario por código
-    operator = db.query(Operator).filter(Operator.codigo_operario == operator_codigo).first()
+    operator = db.query(Operator).filter(Operator.codigo == operator_codigo).first()
     if not operator:
         raise HTTPException(
             status_code=404,
@@ -267,7 +267,7 @@ def list_order_lines(
     - Lista de productos con cantidades y ubicaciones
     """
     # Buscar operario por código
-    operator = db.query(Operator).filter(Operator.codigo_operario == operator_codigo).first()
+    operator = db.query(Operator).filter(Operator.codigo == operator_codigo).first()
     if not operator:
         raise HTTPException(
             status_code=404,
@@ -352,7 +352,7 @@ def start_picking(
     - Información actualizada de la orden
     """
     # Buscar operario por código
-    operator = db.query(Operator).filter(Operator.codigo_operario == operator_codigo).first()
+    operator = db.query(Operator).filter(Operator.codigo == operator_codigo).first()
     if not operator:
         raise HTTPException(
             status_code=404,
@@ -438,7 +438,7 @@ def complete_picking(
     - Información actualizada de la orden
     """
     # Buscar operario por código
-    operator = db.query(Operator).filter(Operator.codigo_operario == operator_codigo).first()
+    operator = db.query(Operator).filter(Operator.codigo == operator_codigo).first()
     if not operator:
         raise HTTPException(
             status_code=404,

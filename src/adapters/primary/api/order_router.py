@@ -142,7 +142,8 @@ def get_order_detail(
     # Buscar la orden con eager loading de relaciones
     order = db.query(Order).options(
         joinedload(Order.order_lines).joinedload(OrderLine.product_reference),
-        joinedload(Order.order_lines).joinedload(OrderLine.product_location)
+        joinedload(Order.order_lines).joinedload(OrderLine.product_location),
+        joinedload(Order.packing_boxes)
     ).filter(Order.id == order_id).first()
     
     if not order:
@@ -169,8 +170,8 @@ def get_order_detail(
         producto = OrderProductDetail(
             id=line.id,
             nombre=product.nombre_producto if product else "Producto no vinculado",
-            descripcion=product.descripcion_color if product else "",
-            color=product.color if product else "",
+            descripcion=product.color if product else "",  # Nombre del color
+            color=product.color_id if product else "",  # Código del color
             talla=product.talla if product else "",
             ubicacion=location.codigo_ubicacion if location else "Sin ubicación",
             sku=product.sku if product else "",
@@ -186,6 +187,10 @@ def get_order_detail(
     if order.total_items > 0:
         progreso = round((order.items_completados / order.total_items) * 100, 2)
     
+    # Contar cajas de la orden
+    num_cajas = len(order.packing_boxes) if order.packing_boxes else 0
+    total_cajas_str = f"{num_cajas} caja{'s' if num_cajas != 1 else ''}" if num_cajas > 0 else "Sin cajas"
+    
     # Construir respuesta
     order_detail = OrderDetailFull(
         id=order.id,
@@ -194,7 +199,7 @@ def get_order_detail(
         nombre_cliente=order.nombre_cliente,
         fecha_creacion=order.fecha_orden,
         fecha_limite="Sin fecha límite",
-        total_cajas=order.caja if order.caja else "Sin cajas",
+        total_cajas=total_cajas_str,
         operario_asignado=operator.nombre if operator else "Sin operario",
         estado=status.nombre if status else "Desconocido",
         estado_codigo=status.codigo if status else "UNKNOWN",
@@ -277,7 +282,7 @@ def assign_operator_to_order(
         notas=f"Operario '{operator.nombre}' asignado a la orden",
         fecha=datetime.now(),
         event_metadata={
-            "operator_codigo": operator.codigo_operario,
+            "operator_codigo": operator.codigo,
             "operator_nombre": operator.nombre
         }
     )
