@@ -14,7 +14,8 @@ from src.adapters.secondary.database.orm import (
     OrderLine, 
     OrderHistory,
     ProductReference,
-    ProductLocation
+    ProductLocation,
+    PackingBox
 )
 from src.core.domain.models import (
     OrderListItem, 
@@ -629,4 +630,311 @@ def validate_order_stock(
         "lines_with_issues": sum(1 for r in validation_results if not r["can_pick"]),
         "summary": issues_count,
         "validation_results": validation_results
+    }
+
+
+# ============================================================================
+# WORKFLOW AUTOMATIZADO CON CAJAS DE EMBALAJE
+# ============================================================================
+
+@router.post("/{order_id}/start-picking")
+def start_picking_with_box(
+    order_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Inicia el proceso de picking para una orden.
+    
+    **Automatización:**
+    1. Cambia el estado de la orden a IN_PICKING
+    2. Crea automáticamente la primera caja de embalaje (Caja #1)
+    3. Asigna la caja como caja activa de la orden
+    4. Registra eventos en el historial
+    
+    **Validaciones:**
+    - La orden debe existir
+    - La orden debe tener operario asignado
+    - La orden debe estar en estado ASSIGNED
+    - No debe tener ya una caja activa
+    
+    **Retorna:**
+    - Información de la orden actualizada
+    - Información de la caja #1 creada
+    """
+    # 1. Validar orden
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Orden con ID {order_id} no encontrada"
+        )
+    
+    # 2. Validar estado
+    status = db.query(OrderStatus).filter(OrderStatus.id == order.status_id).first()
+    if status.codigo != "ASSIGNED":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Solo se puede iniciar picking desde estado ASSIGNED. Estado actual: {status.codigo}"
+        )
+    
+    # 3. Validar operario asignado
+    if not order.operator_id:
+        raise HTTPException(
+            status_code=400,
+            detail="La orden debe tener un operario asignado antes de iniciar picking"
+        )
+    
+    # 4. Validar que no tenga caja activa
+    if order.caja_activa_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"La orden ya tiene una caja activa (ID: {order.caja_activa_id})"
+        )
+    
+    # 5. Cambiar estado a IN_PICKING
+    in_picking_status = db.query(OrderStatus).filter(OrderStatus.codigo == "IN_PICKING").first()
+    if not in_picking_status:
+        raise HTTPException(
+            status_code=500,
+            detail="Estado IN_PICKING no encontrado en el sistema"
+        )
+    
+    old_status_id = order.status_id
+    order.status_id = in_picking_status.id
+    order.fecha_inicio_picking = datetime.utcnow()
+    
+    # 6. Crear primera caja
+    codigo_caja = f"ORD-{order.numero_orden}-BOX-001"
+    
+    first_box = PackingBox(
+        order_id=order_id,
+        numero_caja=1,
+        codigo_caja=codigo_caja,
+        estado="OPEN",
+        operator_id=order.operator_id,
+        total_items=0,
+        fecha_apertura=datetime.utcnow(),
+        notas="Caja inicial creada automáticamente al iniciar picking"
+    )
+    
+    db.add(first_box)
+    db.flush()  # Para obtener el ID
+    
+    # 7. Actualizar orden con caja activa
+    order.caja_activa_id = first_box.id
+    order.total_cajas = 1
+    
+    # 8. Registrar en historial - cambio de estado
+    history_status = OrderHistory(
+        order_id=order_id,
+        status_id=in_picking_status.id,
+        operator_id=order.operator_id,
+        accion="STATUS_CHANGE",
+        status_anterior=old_status_id,
+        status_nuevo=in_picking_status.id,
+        notas=f"Picking iniciado. Estado cambiado a IN_PICKING",
+        fecha=datetime.utcnow()
+    )
+    db.add(history_status)
+    
+    # 9. Registrar en historial - caja abierta
+    history_box = OrderHistory(
+        order_id=order_id,
+        status_id=in_picking_status.id,
+        operator_id=order.operator_id,
+        accion="BOX_OPENED",
+        notas=f"Caja #1 creada automáticamente. Código: {codigo_caja}",
+        fecha=datetime.utcnow(),
+        event_metadata={
+            "packing_box_id": first_box.id,
+            "numero_caja": 1,
+            "codigo_caja": codigo_caja,
+            "auto_created": True
+        }
+    )
+    db.add(history_box)
+    
+    db.commit()
+    db.refresh(order)
+    db.refresh(first_box)
+    
+    return {
+        "success": True,
+        "message": "Picking iniciado exitosamente",
+        "order": {
+            "id": order.id,
+            "numero_orden": order.numero_orden,
+            "status": in_picking_status.nombre,
+            "fecha_inicio_picking": order.fecha_inicio_picking.isoformat(),
+            "total_cajas": order.total_cajas
+        },
+        "caja_inicial": {
+            "id": first_box.id,
+            "numero_caja": first_box.numero_caja,
+            "codigo_caja": first_box.codigo_caja,
+            "estado": first_box.estado
+        }
+    }
+
+
+@router.post("/{order_id}/complete-picking")
+def complete_picking_with_boxes(
+    order_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Completa el proceso de picking para una orden.
+    
+    **Automatización:**
+    1. Valida que todos los items estén empacados
+    2. Cierra automáticamente la caja activa si existe
+    3. Cambia el estado de la orden a PICKED
+    4. Registra fecha de fin de picking
+    5. Registra eventos en el historial
+    
+    **Validaciones:**
+    - La orden debe existir
+    - La orden debe estar en estado IN_PICKING
+    - Todos los items deben estar empacados (packing_box_id no NULL)
+    - Al menos una caja debe existir
+    
+    **Retorna:**
+    - Información de la orden actualizada
+    - Resumen de cajas cerradas
+    """
+    # 1. Validar orden
+    order = db.query(Order).options(
+        joinedload(Order.order_lines)
+    ).filter(Order.id == order_id).first()
+    
+    if not order:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Orden con ID {order_id} no encontrada"
+        )
+    
+    # 2. Validar estado
+    status = db.query(OrderStatus).filter(OrderStatus.id == order.status_id).first()
+    if status.codigo != "IN_PICKING":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Solo se puede completar picking desde estado IN_PICKING. Estado actual: {status.codigo}"
+        )
+    
+    # 3. Validar que todos los items estén empacados
+    unpacked_items = [
+        line for line in order.order_lines 
+        if line.packing_box_id is None
+    ]
+    
+    if unpacked_items:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No se puede completar picking. {len(unpacked_items)} items sin empacar. "
+                   f"Todos los items deben estar en una caja antes de completar."
+        )
+    
+    # 4. Validar que exista al menos una caja
+    boxes_count = db.query(PackingBox).filter(PackingBox.order_id == order_id).count()
+    if boxes_count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede completar picking. La orden no tiene ninguna caja creada."
+        )
+    
+    # 5. Cerrar caja activa si existe
+    closed_box_info = None
+    if order.caja_activa_id:
+        active_box = db.query(PackingBox).filter(PackingBox.id == order.caja_activa_id).first()
+        if active_box and active_box.estado == "OPEN":
+            active_box.estado = "CLOSED"
+            active_box.fecha_cierre = datetime.utcnow()
+            
+            closed_box_info = {
+                "id": active_box.id,
+                "numero_caja": active_box.numero_caja,
+                "codigo_caja": active_box.codigo_caja,
+                "total_items": active_box.total_items
+            }
+            
+            # Registrar cierre de caja
+            history_box_close = OrderHistory(
+                order_id=order_id,
+                status_id=order.status_id,
+                operator_id=order.operator_id,
+                accion="BOX_CLOSED",
+                notas=f"Caja #{active_box.numero_caja} cerrada automáticamente al completar picking. "
+                      f"{active_box.total_items} items empacados.",
+                fecha=datetime.utcnow(),
+                event_metadata={
+                    "packing_box_id": active_box.id,
+                    "numero_caja": active_box.numero_caja,
+                    "total_items": active_box.total_items,
+                    "auto_closed": True
+                }
+            )
+            db.add(history_box_close)
+        
+        order.caja_activa_id = None
+    
+    # 6. Cambiar estado a PICKED
+    picked_status = db.query(OrderStatus).filter(OrderStatus.codigo == "PICKED").first()
+    if not picked_status:
+        raise HTTPException(
+            status_code=500,
+            detail="Estado PICKED no encontrado en el sistema"
+        )
+    
+    old_status_id = order.status_id
+    order.status_id = picked_status.id
+    order.fecha_fin_picking = datetime.utcnow()
+    
+    # 7. Registrar en historial - cambio de estado
+    history_status = OrderHistory(
+        order_id=order_id,
+        status_id=picked_status.id,
+        operator_id=order.operator_id,
+        accion="PICKING_COMPLETED",
+        status_anterior=old_status_id,
+        status_nuevo=picked_status.id,
+        notas=f"Picking completado. {order.total_cajas} cajas creadas.",
+        fecha=datetime.utcnow(),
+        event_metadata={
+            "total_cajas": order.total_cajas,
+            "total_items": order.total_items,
+            "items_completados": order.items_completados
+        }
+    )
+    db.add(history_status)
+    
+    db.commit()
+    db.refresh(order)
+    
+    # 8. Obtener resumen de cajas
+    all_boxes = db.query(PackingBox).filter(PackingBox.order_id == order_id).all()
+    boxes_summary = [
+        {
+            "numero_caja": box.numero_caja,
+            "codigo_caja": box.codigo_caja,
+            "estado": box.estado,
+            "total_items": box.total_items
+        }
+        for box in all_boxes
+    ]
+    
+    return {
+        "success": True,
+        "message": "Picking completado exitosamente",
+        "order": {
+            "id": order.id,
+            "numero_orden": order.numero_orden,
+            "status": picked_status.nombre,
+            "fecha_inicio_picking": order.fecha_inicio_picking.isoformat() if order.fecha_inicio_picking else None,
+            "fecha_fin_picking": order.fecha_fin_picking.isoformat(),
+            "total_cajas": order.total_cajas,
+            "total_items": order.total_items,
+            "items_completados": order.items_completados
+        },
+        "caja_cerrada_automaticamente": closed_box_info,
+        "resumen_cajas": boxes_summary
     }

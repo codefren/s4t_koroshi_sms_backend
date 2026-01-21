@@ -167,6 +167,8 @@ class OrderLineResponse(OrderLineBase):
     """Modelo de respuesta para línea de orden."""
     id: int
     order_id: int
+    packing_box_id: Optional[int] = Field(None, description="ID de la caja donde está empacado este item")
+    fecha_empacado: Optional[datetime] = Field(None, description="Cuándo se empacó este item")
     created_at: datetime
     updated_at: datetime
 
@@ -212,6 +214,8 @@ class OrderResponse(OrderBase):
     fecha_fin_picking: Optional[datetime] = None
     total_items: int = 0
     items_completados: int = 0
+    total_cajas: int = Field(default=0, description="Total de cajas creadas para esta orden")
+    caja_activa_id: Optional[int] = Field(None, description="ID de la caja actualmente abierta")
     created_at: datetime
     updated_at: datetime
 
@@ -220,6 +224,12 @@ class OrderDetailResponse(OrderResponse):
     order_lines: List[OrderLineResponse] = []
     status: Optional[OrderStatusResponse] = None
     operator: Optional[OperatorResponse] = None
+
+
+class OrderDetailWithBoxes(OrderDetailResponse):
+    """Modelo de respuesta con cajas de embalaje incluidas."""
+    packing_boxes: List['PackingBoxWithOperator'] = Field(default=[], description="Cajas de embalaje de esta orden")
+    caja_activa: Optional['PackingBoxResponse'] = Field(None, description="Caja actualmente abierta")
 
 
 class OrderListItem(BaseModel):
@@ -346,6 +356,80 @@ class PickingTaskDetailResponse(PickingTaskResponse):
     """Modelo de respuesta detallado con información de la orden."""
     order_line: Optional[OrderLineResponse] = None
     operator: Optional[OperatorResponse] = None
+
+
+# ============================================================================
+# MODELOS PYDANTIC PARA CAJAS DE EMBALAJE
+# ============================================================================
+
+class PackingBoxBase(BaseModel):
+    """Modelo base para cajas de embalaje."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    numero_caja: int = Field(description="Número secuencial de la caja (1, 2, 3...)")
+    codigo_caja: str = Field(description="Código único escaneable de la caja")
+    estado: str = Field(default='OPEN', description="Estado de la caja: OPEN, CLOSED, SHIPPED")
+    peso_kg: Optional[float] = Field(None, description="Peso de la caja en kilogramos")
+    dimensiones: Optional[str] = Field(None, description="Dimensiones de la caja (ej: 40x30x20 cm)")
+    total_items: int = Field(default=0, description="Total de items empacados en esta caja")
+    notas: Optional[str] = None
+
+
+class PackingBoxCreate(BaseModel):
+    """Modelo para crear una caja de embalaje."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    notas: Optional[str] = Field(None, description="Notas opcionales al abrir la caja")
+
+
+class PackingBoxUpdate(BaseModel):
+    """Modelo para actualizar una caja de embalaje."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    peso_kg: Optional[float] = Field(None, description="Peso de la caja en kilogramos")
+    dimensiones: Optional[str] = Field(None, description="Dimensiones (ej: 40x30x20 cm)")
+    notas: Optional[str] = Field(None, description="Notas adicionales")
+
+
+class PackingBoxClose(BaseModel):
+    """Modelo para cerrar una caja de embalaje."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    peso_kg: Optional[float] = Field(None, description="Peso final de la caja")
+    dimensiones: Optional[str] = Field(None, description="Dimensiones finales")
+    notas: Optional[str] = Field(None, description="Notas al cerrar")
+
+
+class PackingBoxResponse(PackingBoxBase):
+    """Modelo de respuesta para caja de embalaje."""
+    id: int
+    order_id: int
+    operator_id: Optional[int] = None
+    fecha_apertura: datetime = Field(description="Cuándo se abrió la caja")
+    fecha_cierre: Optional[datetime] = Field(None, description="Cuándo se cerró la caja")
+    created_at: datetime
+    updated_at: datetime
+
+
+class PackingBoxWithOperator(PackingBoxResponse):
+    """Modelo de respuesta con información del operario."""
+    operator: Optional[OperatorResponse] = Field(None, description="Operario que empacó esta caja")
+
+
+class PackingBoxDetail(PackingBoxWithOperator):
+    """Modelo de respuesta detallado con los items de la caja."""
+    items: List[OrderLineResponse] = Field(default=[], description="Items empacados en esta caja")
+
+
+class PackItemRequest(BaseModel):
+    """Modelo para solicitud de empacar un item en una caja."""
+    order_line_id: int = Field(description="ID de la línea de orden a empacar")
+    packing_box_id: Optional[int] = Field(None, description="ID de la caja (NULL = usar caja activa)")
+
+
+class UnpackItemRequest(BaseModel):
+    """Modelo para solicitud de desempacar un item de una caja."""
+    order_line_id: int = Field(description="ID de la línea de orden a desempacar")
 
 
 # ============================================================================

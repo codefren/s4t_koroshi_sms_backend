@@ -4,12 +4,10 @@ WebSocket endpoint para operarios de PDA.
 Maneja la conexión WebSocket y el escaneo de productos en tiempo real.
 """
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from datetime import datetime
 
 from .manager import manager
-from ...secondary.database.config import get_db
 from ...secondary.database.orm import Operator, Order, OrderLine
 
 
@@ -19,8 +17,7 @@ router = APIRouter()
 @router.websocket("/ws/operators/{codigo_operario}")
 async def operator_websocket_endpoint(
     websocket: WebSocket,
-    codigo_operario: str,
-    db: Session = Depends(get_db)
+    codigo_operario: str
 ):
     """
     WebSocket endpoint para operarios de PDA.
@@ -31,28 +28,36 @@ async def operator_websocket_endpoint(
     {
         "action": "scan_product",
         "data": {
-            "numero_orden": "ORD1001",
+            "order_id": 35,                    // Opción 1: ID numérico
+            "numero_orden": "ORD1001",         // Opción 2: Número de orden
             "ean": "8445962763983",
-            "ubicacion": "A-IZQ-12-H2"  (opcional)
+            "ubicacion": "A-IZQ-12-H2"         // opcional
         }
     }
     
     Args:
         websocket: Conexión WebSocket
         codigo_operario: Código del operario que se conecta (ej: OP001)
-        db: Sesión de base de datos
     """
     
-    # 1. Validar que el operario existe y está activo
-    operator = db.query(Operator).filter_by(codigo_operario=codigo_operario).first()
-    
-    if not operator:
-        await websocket.close(code=4004, reason="Operario no encontrado")
-        return
-    
-    if not operator.activo:
-        await websocket.close(code=4003, reason="Operario inactivo")
-        return
+    # 1. Validar que el operario existe y está activo (usar sesión temporal)
+    from ...secondary.database.config import SessionLocal
+    db = SessionLocal()
+    try:
+        operator = db.query(Operator).filter_by(codigo_operario=codigo_operario).first()
+        
+        if not operator:
+            await websocket.close(code=4004, reason="Operario no encontrado")
+            return
+        
+        if not operator.activo:
+            await websocket.close(code=4003, reason="Operario inactivo")
+            return
+        
+        operator_id = operator.id
+        operator_name = operator.nombre
+    finally:
+        db.close()
     
     # 2. Conectar al operario
     await manager.connect(websocket, codigo_operario)
@@ -61,10 +66,10 @@ async def operator_websocket_endpoint(
     await manager.send_message(codigo_operario, {
         "action": "connected",
         "data": {
-            "operator_id": operator.id,
+            "operator_id": operator_id,
             "codigo_operario": codigo_operario,
-            "operator_name": operator.nombre,
-            "message": f"✅ Conectado como {operator.nombre}"
+            "operator_name": operator_name,
+            "message": f"✅ Conectado como {operator_name}"
         }
     })
     
@@ -80,10 +85,9 @@ async def operator_websocket_endpoint(
             if action == "scan_product":
                 await handle_scan_product(
                     websocket, 
-                    operator.id,  # Pasar el ID numérico para validaciones
-                    codigo_operario,  # Pasar el código para respuestas
-                    data.get("data", {}), 
-                    db
+                    operator_id,  # ID numérico para validaciones
+                    codigo_operario,  # Código para respuestas
+                    data.get("data", {})
                 )
             else:
                 await send_error(
@@ -109,8 +113,7 @@ async def handle_scan_product(
     websocket: WebSocket,
     operator_id: int,
     codigo_operario: str,
-    data: dict,
-    db: Session
+    data: dict
 ):
     """
     Procesa el escaneo de un producto.
@@ -122,17 +125,22 @@ async def handle_scan_product(
         websocket: Conexión WebSocket
         operator_id: ID numérico del operario (para validaciones)
         codigo_operario: Código del operario (para respuestas)
-        data: Datos del escaneo (numero_orden, ean, ubicacion)
-        db: Sesión de base de datos
+        data: Datos del escaneo (order_id o numero_orden, ean, ubicacion)
     """
+    # Crear sesión de base de datos para esta operación
+    from ...secondary.database.config import SessionLocal
+    db = SessionLocal()
+    
     try:
-        numero_orden = data.get("numero_orden")
+        # Aceptar order_id, numero_orden u order_number para flexibilidad
+        order_id = data.get("order_id")
+        numero_orden = data.get("numero_orden") or data.get("order_number")  # Aceptar ambos nombres
         ean = data.get("ean")
         ubicacion = data.get("ubicacion")
         
         # Validaciones de entrada
-        if not numero_orden:
-            await send_error(websocket, "MISSING_ORDER_NUMBER", "Falta el número de orden")
+        if not order_id and not numero_orden:
+            await send_error(websocket, "MISSING_ORDER_NUMBER", "Falta el ID o número de orden")
             return
         
         if not ean:
@@ -140,7 +148,10 @@ async def handle_scan_product(
             return
         
         # 1. Validar que la orden existe y está asignada al operario
-        order = db.query(Order).filter_by(numero_orden=numero_orden).first()
+        if order_id:
+            order = db.query(Order).filter_by(id=order_id).first()
+        else:
+            order = db.query(Order).filter_by(numero_orden=numero_orden).first()
         
         if not order:
             await send_error(websocket, "ORDER_NOT_FOUND", "Orden no encontrada")
@@ -195,13 +206,9 @@ async def handle_scan_product(
         elif line.cantidad_servida > 0:
             line.estado = "PARTIAL"
         
-        # 7. Actualizar contador de items completados de la orden (suma de unidades servidas)
-        from sqlalchemy import func
-        items_completados = db.query(func.sum(OrderLine.cantidad_servida)).filter(
-            OrderLine.order_id == order.id
-        ).scalar() or 0
-        
-        order.items_completados = items_completados
+        # 7. Incrementar contador de items completados de la orden
+        # Incrementamos directamente en lugar de recalcular con SUM para evitar race conditions
+        order.items_completados += 1
         
         # 8. Guardar cambios
         db.commit()
@@ -259,6 +266,9 @@ async def handle_scan_product(
         traceback.print_exc()
         await send_error(websocket, "INTERNAL_ERROR", f"Error interno: {str(e)}")
         db.rollback()
+    finally:
+        # Siempre cerrar la sesión
+        db.close()
 
 
 async def send_error(websocket: WebSocket, error_code: str, message: str):

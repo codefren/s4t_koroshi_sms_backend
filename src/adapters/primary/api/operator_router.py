@@ -205,31 +205,31 @@ def toggle_operator_status(
 # ENDPOINTS PARA GESTIÓN DE ÓRDENES DEL OPERARIO (PDA)
 # ============================================================================
 
-@router.get("/{operator_id}/orders")
+@router.get("/{operator_codigo}/orders")
 def list_operator_orders(
-    operator_id: int,
+    operator_codigo: str,
     db: Session = Depends(get_db)
 ):
     """
     Lista todas las órdenes asignadas a un operario.
     
     **Parámetros:**
-    - `operator_id`: ID del operario
+    - `operator_codigo`: Código del operario (ej: "OP001", "OP002")
     
     **Retorna:**
     - Lista de órdenes con información básica
     """
-    # Verificar que el operario existe
-    operator = db.query(Operator).filter(Operator.id == operator_id).first()
+    # Buscar operario por código
+    operator = db.query(Operator).filter(Operator.codigo_operario == operator_codigo).first()
     if not operator:
         raise HTTPException(
             status_code=404,
-            detail=f"Operario con ID {operator_id} no encontrado"
+            detail=f"Operario con código '{operator_codigo}' no encontrado"
         )
     
     # Obtener órdenes asignadas al operario
     orders = db.query(Order).filter(
-        Order.operator_id == operator_id
+        Order.operator_id == operator.id
     ).order_by(Order.created_at.desc()).all()
     
     # Formatear respuesta
@@ -250,9 +250,9 @@ def list_operator_orders(
     return result
 
 
-@router.get("/{operator_id}/orders/{order_id}/lines")
+@router.get("/{operator_codigo}/orders/{order_id}/lines")
 def list_order_lines(
-    operator_id: int,
+    operator_codigo: str,
     order_id: int,
     db: Session = Depends(get_db)
 ):
@@ -260,18 +260,18 @@ def list_order_lines(
     Lista todos los productos (líneas) de una orden específica.
     
     **Parámetros:**
-    - `operator_id`: ID del operario
+    - `operator_codigo`: Código del operario (ej: "OP001", "OP002")
     - `order_id`: ID de la orden
     
     **Retorna:**
     - Lista de productos con cantidades y ubicaciones
     """
-    # Verificar que el operario existe
-    operator = db.query(Operator).filter(Operator.id == operator_id).first()
+    # Buscar operario por código
+    operator = db.query(Operator).filter(Operator.codigo_operario == operator_codigo).first()
     if not operator:
         raise HTTPException(
             status_code=404,
-            detail=f"Operario con ID {operator_id} no encontrado"
+            detail=f"Operario con código '{operator_codigo}' no encontrado"
         )
     
     # Verificar que la orden existe y está asignada al operario
@@ -282,7 +282,7 @@ def list_order_lines(
             detail=f"Orden con ID {order_id} no encontrada"
         )
     
-    if order.operator_id != operator_id:
+    if order.operator_id != operator.id:
         raise HTTPException(
             status_code=403,
             detail="Esta orden no está asignada a este operario"
@@ -331,9 +331,9 @@ def list_order_lines(
     return result
 
 
-@router.post("/{operator_id}/orders/{order_id}/start-picking")
+@router.post("/{operator_codigo}/orders/{order_id}/start-picking")
 def start_picking(
-    operator_id: int,
+    operator_codigo: str,
     order_id: int,
     db: Session = Depends(get_db)
 ):
@@ -341,7 +341,7 @@ def start_picking(
     Inicia el proceso de picking de una orden.
     
     **Parámetros:**
-    - `operator_id`: ID del operario
+    - `operator_codigo`: Código del operario (ej: "OP001", "OP002")
     - `order_id`: ID de la orden
     
     **Acción:**
@@ -351,12 +351,12 @@ def start_picking(
     **Retorna:**
     - Información actualizada de la orden
     """
-    # Verificar que el operario existe
-    operator = db.query(Operator).filter(Operator.id == operator_id).first()
+    # Buscar operario por código
+    operator = db.query(Operator).filter(Operator.codigo_operario == operator_codigo).first()
     if not operator:
         raise HTTPException(
             status_code=404,
-            detail=f"Operario con ID {operator_id} no encontrado"
+            detail=f"Operario con código '{operator_codigo}' no encontrado"
         )
     
     # Verificar que la orden existe y está asignada al operario
@@ -367,13 +367,24 @@ def start_picking(
             detail=f"Orden con ID {order_id} no encontrada"
         )
     
-    if order.operator_id != operator_id:
+    if order.operator_id != operator.id:
         raise HTTPException(
             status_code=403,
             detail="Esta orden no está asignada a este operario"
         )
     
     # Verificar estado actual
+    # Si ya está en IN_PICKING, devolver respuesta exitosa (idempotente)
+    if order.status.codigo == "IN_PICKING":
+        return {
+            "message": "La orden ya está en proceso de picking",
+            "order_id": order.id,
+            "numero_orden": order.numero_orden,
+            "estado": order.status.codigo,
+            "fecha_inicio_picking": order.fecha_inicio_picking.isoformat() if order.fecha_inicio_picking else None
+        }
+    
+    # Si no está en estado válido para iniciar picking
     if order.status.codigo not in ["PENDING", "ASSIGNED"]:
         raise HTTPException(
             status_code=400,
@@ -406,9 +417,9 @@ def start_picking(
     }
 
 
-@router.post("/{operator_id}/orders/{order_id}/complete-picking")
+@router.post("/{operator_codigo}/orders/{order_id}/complete-picking")
 def complete_picking(
-    operator_id: int,
+    operator_codigo: str,
     order_id: int,
     db: Session = Depends(get_db)
 ):
@@ -416,7 +427,7 @@ def complete_picking(
     Completa el proceso de picking de una orden.
     
     **Parámetros:**
-    - `operator_id`: ID del operario
+    - `operator_codigo`: Código del operario (ej: "OP001", "OP002")
     - `order_id`: ID de la orden
     
     **Acción:**
@@ -426,12 +437,12 @@ def complete_picking(
     **Retorna:**
     - Información actualizada de la orden
     """
-    # Verificar que el operario existe
-    operator = db.query(Operator).filter(Operator.id == operator_id).first()
+    # Buscar operario por código
+    operator = db.query(Operator).filter(Operator.codigo_operario == operator_codigo).first()
     if not operator:
         raise HTTPException(
             status_code=404,
-            detail=f"Operario con ID {operator_id} no encontrado"
+            detail=f"Operario con código '{operator_codigo}' no encontrado"
         )
     
     # Verificar que la orden existe y está asignada al operario
@@ -442,13 +453,24 @@ def complete_picking(
             detail=f"Orden con ID {order_id} no encontrada"
         )
     
-    if order.operator_id != operator_id:
+    if order.operator_id != operator.id:
         raise HTTPException(
             status_code=403,
             detail="Esta orden no está asignada a este operario"
         )
     
     # Verificar estado actual
+    # Si ya está en PICKED, devolver respuesta exitosa (idempotente)
+    if order.status.codigo == "PICKED":
+        return {
+            "message": "El picking de esta orden ya está completado",
+            "order_id": order.id,
+            "numero_orden": order.numero_orden,
+            "estado": order.status.codigo,
+            "fecha_fin_picking": order.fecha_fin_picking.isoformat() if order.fecha_fin_picking else None
+        }
+    
+    # Si no está en IN_PICKING, no se puede completar
     if order.status.codigo != "IN_PICKING":
         raise HTTPException(
             status_code=400,

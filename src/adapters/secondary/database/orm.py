@@ -4,70 +4,33 @@ from datetime import datetime
 from src.adapters.secondary.database.config import Base
 
 
-class InventoryItemModel(Base):
-    __tablename__ = "inventory_items"
-
-    id = Column(Integer, primary_key=True, index=True) # Adding an internal ID since the CSV doesn't seem to have a unique PK, or EAN isn't unique enough?
-    ean = Column(String(50), index=True)
-    ubicacion = Column(String)# deprecated
-    articulo = Column(String)
-    color = Column(String)
-    talla = Column(String)
-    posicion_talla = Column(String, nullable=True)
-    descripcion_producto = Column(String, nullable=True)
-    descripcion_color = Column(String, nullable=True)
-    temporada = Column(String, nullable=True)
-    numero_orden = Column(String(50), index=True)
-    cliente = Column(String)
-    nombre_cliente = Column(String, nullable=True)
-    cantidad = Column(Integer)
-    servida = Column(Integer)
-    operario = Column(String, nullable=True)
-    status = Column(String, nullable=True)
-    fecha = Column(String, nullable=True) # Could be Date type if we parse it
-    hora = Column(String, nullable=True)  # Could be Time type
-    caja = Column(String, nullable=True)
-
-
-# ============================================================================
-# MODELOS DEL SISTEMA DE GESTIÓN DE ÓRDENES Y PICKING
-# ============================================================================
-
-class OrderViewCache(Base):
+class Address(Base):
     """
-    Caché de la VIEW de SQL Server para detectar órdenes nuevas.
-    
-    Esta tabla almacena una copia de los datos crudos que vienen de la VIEW externa
-    de SQL Server. Se usa para:
-    - Detectar órdenes nuevas comparando numero_orden
-    - Evitar procesar la misma orden múltiples veces
-    - Mantener auditoría de qué datos llegaron del sistema externo
-    - Permitir re-procesamiento si es necesario
+    Direcciones
     """
-    __tablename__ = "order_view_cache"
-
+    __tablename__ = "direcciones"
     id = Column(Integer, primary_key=True, index=True)
-    # Número de orden del sistema externo - usado como identificador único
-    numero_orden = Column(String(100), unique=True, nullable=False, index=True)
-    
-    # Datos completos en formato JSON tal como vienen de la VIEW
-    # Permite reconstruir el origen exacto y auditar cambios
-    raw_data = Column(JSON, nullable=False)
-    
-    # Timestamp de cuándo se consultó esta orden desde la VIEW
-    # Útil para saber la "frescura" de los datos
-    fecha_importacion = Column(DateTime, nullable=False, default=datetime.utcnow)
-    
-    # Flag que indica si esta orden ya fue normalizada a las tablas principales
-    # False = pendiente de procesar, True = ya procesada
-    procesado = Column(Boolean, default=False, nullable=False, index=True)
-    
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    description = Column(String(100), nullable=True)
+    address = Column(String(100), nullable=True)
+    zipcode = Column(String(10), nullable=True)
+    city = Column(String(50), nullable=True)
+    country = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow(), nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow(), onupdate=datetime.utcnow(), nullable=False)
 
-    __table_args__ = (
-        Index('idx_numero_orden_procesado', 'numero_orden', 'procesado'),
-    )
 
+class Client(Base):
+    """
+    Clientes
+    """
+    __tablename__ = "clientes"
+    id = Column(Integer, primary_key=True, index=True)
+    description = Column(String(100), nullable=False)
+    codigo = Column(String(10), nullable=False, index=True)
+    phone_number = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow(), nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow(), onupdate=datetime.utcnow(), nullable=False)
+    
 
 class OrderStatus(Base):
     """
@@ -173,7 +136,18 @@ class Order(Base):
     # Número de orden del sistema externo - identificador único de negocio
     # Viene de la VIEW de SQL Server y agrupa múltiples líneas
     numero_orden = Column(String(100), unique=True, nullable=False, index=True)
-    
+
+    numero_pedido = Column(String(100), nullable=True, index=True)
+
+    client = Column(Integer, ForeignKey("clientes.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    address = Column(Integer, ForeignKey("direcciones.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # Almacén de origen de la orden
+    # NULL = No asignado a almacén específico
+    almacen_id = Column(Integer, ForeignKey("almacenes.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    type = Column(String(10), nullable=False, index=True)
     # === DATOS DEL CLIENTE (desnormalizados) ===
     # Código del cliente del sistema externo
     cliente = Column(String(100), nullable=False, index=True)
@@ -205,12 +179,20 @@ class Order(Base):
     fecha_fin_picking = Column(DateTime, nullable=True)
     
     # === INFORMACIÓN ADICIONAL ===
-    # Número de caja donde se empacará/empacó la orden
-    caja = Column(String(50), nullable=True)
-    
     # Prioridad de la orden: LOW, NORMAL, HIGH, URGENT
     # Determina el orden en que se procesan las órdenes
     prioridad = Column(String(20), default='NORMAL', nullable=False, index=True)
+    
+    # Caja actualmente OPEN (recibiendo items)
+    # NULL = No hay caja abierta
+    # NOT NULL = ID de la caja actual donde se están empacando items
+    # Solo puede haber UNA caja activa por orden
+    caja_activa_id = Column(
+        Integer,
+        ForeignKey("packing_boxes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
     
     # === CONTADORES (desnormalizados para performance) ===
     # Total de UNIDADES solicitadas en la orden (suma de cantidad_solicitada de todas las líneas)
@@ -233,13 +215,112 @@ class Order(Base):
     # Relationships
     status = relationship("OrderStatus", back_populates="orders", foreign_keys=[status_id])
     operator = relationship("Operator", back_populates="orders")
+    almacen = relationship("Almacen", back_populates="orders")
     order_lines = relationship("OrderLine", back_populates="order", cascade="all, delete-orphan")
     history = relationship("OrderHistory", back_populates="order", cascade="all, delete-orphan")
+    
+    # Relación con cajas de embalaje
+    packing_boxes = relationship("PackingBox", back_populates="order", cascade="all, delete-orphan", foreign_keys="[PackingBox.order_id]")
+    # Caja actualmente abierta (relación especial, sin cascade)
+    caja_activa = relationship("PackingBox", foreign_keys=[caja_activa_id], post_update=True)
 
     __table_args__ = (
         Index('idx_status_operator', 'status_id', 'operator_id'),
         Index('idx_status_fecha', 'status_id', 'fecha_orden'),
         Index('idx_fecha_importacion', 'fecha_importacion'),
+    )
+
+
+class PackingBox(Base):
+    """
+    Cajas de embalaje para órdenes de picking.
+    
+    Representa una caja física donde se colocan los items durante el proceso
+    de picking. El flujo es dinámico:
+    
+    1. Al iniciar picking → Se crea automáticamente la Caja #1 (estado OPEN)
+    2. Operario escanea items → Se asignan a la caja activa
+    3. Caja se llena → Operario la cierra (estado CLOSED)
+    4. Necesita más espacio → Se abre automáticamente Caja #2
+    5. Repite hasta completar la orden
+    
+    Una orden puede tener N cajas. Cada caja tiene un código único escaneable
+    para trazabilidad en el proceso de envío.
+    
+    Estados:
+    - OPEN: Caja abierta, recibiendo items (solo 1 por orden)
+    - CLOSED: Caja cerrada, lista para envío
+    - SHIPPED: Caja enviada al cliente
+    """
+    __tablename__ = "packing_boxes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Orden a la que pertenece esta caja
+    order_id = Column(Integer, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # === IDENTIFICACIÓN ===
+    # Número secuencial de la caja dentro de la orden (1, 2, 3...)
+    # Se incrementa automáticamente al crear nueva caja
+    numero_caja = Column(Integer, nullable=False)
+    
+    # Código único escaneable para identificar la caja
+    # Formato: "ORD-{numero_orden}-BOX-{numero_caja:03d}"
+    # Ejemplo: "ORD-12345-BOX-001", "ORD-12345-BOX-002"
+    # Permite escanear la caja para asociar productos o rastrear envíos
+    codigo_caja = Column(String(150), unique=True, nullable=False, index=True)
+    
+    # === ESTADO Y CONTROL ===
+    # Estado actual de la caja: OPEN, CLOSED, SHIPPED
+    # Solo puede haber UNA caja OPEN por orden
+    estado = Column(String(20), default='OPEN', nullable=False, index=True)
+    
+    # Operario que está/estuvo empacando en esta caja
+    # Normalmente es el mismo operario asignado a la orden
+    operator_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True, index=True)
+    
+    # === CARACTERÍSTICAS FÍSICAS (Opcionales) ===
+    # Peso de la caja en kilogramos
+    # Se puede registrar al cerrar la caja (con báscula)
+    peso_kg = Column(Float, nullable=True)
+    
+    # Dimensiones de la caja en formato texto
+    # Ejemplo: "40x30x20 cm", "50x40x35"
+    dimensiones = Column(String(50), nullable=True)
+    
+    # === CONTADOR DESNORMALIZADO ===
+    # Total de items (order_lines) asignados a esta caja
+    # Se incrementa cada vez que se empaca un item
+    # Permite saber rápidamente si la caja está vacía o cuántos items tiene
+    total_items = Column(Integer, default=0, nullable=False)
+    
+    # === FECHAS DE CONTROL ===
+    # Cuándo se abrió/creó la caja
+    fecha_apertura = Column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    # Cuándo se cerró la caja (NULL si aún está OPEN)
+    fecha_cierre = Column(DateTime, nullable=True)
+    
+    # === METADATOS ===
+    # Notas del operario sobre esta caja
+    # Ejemplo: "Productos frágiles", "Requiere empaque especial"
+    notas = Column(Text, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    order = relationship("Order", back_populates="packing_boxes", foreign_keys=[order_id])
+    operator = relationship("Operator", backref="packing_boxes")
+    order_lines = relationship("OrderLine", back_populates="packing_box")
+
+    __table_args__ = (
+        # No duplicar número de caja en la misma orden
+        UniqueConstraint('order_id', 'numero_caja', name='uq_order_numero_caja'),
+        # Índice para buscar caja activa de una orden
+        Index('idx_order_estado', 'order_id', 'estado'),
+        # Índice para búsqueda por código de caja
+        Index('idx_codigo_caja', 'codigo_caja'),
     )
 
 
@@ -284,6 +365,25 @@ class OrderLine(Base):
         index=True
     )
     
+    # === EMPAQUE EN CAJAS ===
+    # Caja en la que se empacó este item
+    # NULL = Item aún no ha sido empacado en ninguna caja
+    # NOT NULL = Item ya está en una caja específica
+    # Se asigna durante el proceso de picking cuando el operario coloca el item en la caja
+    # IMPORTANTE: ondelete="NO ACTION" para evitar ciclo de cascadas en SQL Server
+    # (order_lines -> orders CASCADE, packing_boxes -> orders CASCADE)
+    packing_box_id = Column(
+        Integer,
+        ForeignKey("packing_boxes.id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True
+    )
+    
+    # Cuándo se empacó este item en la caja
+    # NULL si aún no se ha empacado
+    # Se registra automáticamente al asignar packing_box_id
+    fecha_empacado = Column(DateTime, nullable=True)
+    
     # === DATOS MÍNIMOS (para búsquedas rápidas) ===
     # Código de barras EAN del producto - usado para escanear y match rápido
     # Único campo desnormalizado que se mantiene por performance
@@ -313,6 +413,9 @@ class OrderLine(Base):
     # Relaciones con el catálogo normalizado de productos
     product_reference = relationship("ProductReference", backref="order_lines")
     product_location = relationship("ProductLocation", backref="order_lines")
+    
+    # Relación con la caja de embalaje
+    packing_box = relationship("PackingBox", back_populates="order_lines")
 
     __table_args__ = (
         Index('idx_order_estado', 'order_id', 'estado'),
@@ -491,6 +594,37 @@ class PickingTask(Base):
 # ============================================================================
 # MODELOS DE GESTIÓN DE PRODUCTOS Y UBICACIONES
 # ============================================================================
+class EAN(Base):
+    """
+    Códigos de barras EAN asociados a productos.
+        
+    Permite gestionar múltiples códigos EAN para el mismo producto.
+    Un producto puede tener varios EANs (diferentes proveedores o presentaciones).
+    
+    Ejemplo:
+    - EAN: "1234567890123" → Producto: Camisa Roja M (Proveedor A)
+    - EAN: "9876543210987" → Producto: Camisa Roja M (Proveedor B)
+    """
+    __tablename__ = "ean"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Código de barras EAN (generalmente 13 dígitos)
+    # UNIQUE: Un mismo EAN no puede repetirse en el sistema
+    ean = Column(String(13), unique=True, nullable=False, index=True)
+    
+    # Referencia al producto asociado
+    # NULL = EAN sin producto asignado (pendiente de catalogar)
+    product_reference_id = Column(
+        Integer, 
+        ForeignKey("product_references.id", ondelete="SET NULL"), 
+        nullable=True, 
+        index=True
+    )
+    
+    # Relationships
+    product = relationship("ProductReference", back_populates="eans")
+
 
 class ProductReference(Base):
     """
@@ -525,7 +659,7 @@ class ProductReference(Base):
     
     # Nombre descriptivo del producto
     # Ejemplo: "Camisa Polo Manga Corta", "Pantalón Vaquero Slim"
-    nombre_producto = Column(String(200), nullable=False, index=True)
+    nombre_producto = Column(String(200), nullable=False)
     
     # ID del color en el catálogo
     # Puede ser numérico ("000001", "000002") o código ("RED", "BLUE")
@@ -542,16 +676,15 @@ class ProductReference(Base):
     # Posición de la talla en el catálogo (para ordenamiento)
     # Ejemplo: "1", "2", "3" para ordenar XS < S < M < L
     posicion_talla = Column(String(50), nullable=True)
-    
-    # === INFORMACIÓN ADICIONAL OPCIONAL ===
-    
-    # Descripción legible del color (ej: "Rojo Vino", "Azul Marino")
-    descripcion_color = Column(String(100), nullable=True)
+
     
     # Código de barras EAN del producto
     ean = Column(String(50), nullable=True, index=True)
+
+    # un ean puede tener multiples rf_id y cada rf id es unico
+    rf_id = Column(String(70), nullable=True, index=True)
     
-    # SKU o código interno del artículo
+    # SKU o código interno del artículo (referencia - color - talla)
     sku = Column(String(100), nullable=True, index=True)
     
     # Temporada del producto (ej: "Verano 2024", "Invierno 2025")
@@ -567,6 +700,9 @@ class ProductReference(Base):
     # Relationships
     # Un producto puede estar en múltiples ubicaciones
     locations = relationship("ProductLocation", back_populates="product", cascade="all, delete-orphan")
+    
+    # Un producto puede tener múltiples códigos EAN
+    eans = relationship("EAN", back_populates="product", cascade="all, delete-orphan")
 
     __table_args__ = (
         # Índice para búsquedas por color y talla
@@ -578,6 +714,21 @@ class ProductReference(Base):
         # Índice compuesto para búsquedas frecuentes
         Index('idx_nombre_color_talla', 'nombre_producto', 'color_id', 'talla'),
     )
+
+class Almacen(Base):
+    """
+    Almacenes
+    """
+    __tablename__ = "almacenes"
+    id = Column(Integer, primary_key=True, index=True)
+    codigo = Column(String(10), nullable=False, index=True)
+    descripciones = Column(String(250), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow(), nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow(), onupdate=datetime.utcnow(), nullable=False)
+    
+    # Relationships
+    locations = relationship("ProductLocation", back_populates="almacen", cascade="all, delete-orphan")
+    orders = relationship("Order", back_populates="almacen")
 
 
 class ProductLocation(Base):
@@ -608,41 +759,40 @@ class ProductLocation(Base):
     __tablename__ = "product_locations"
 
     id = Column(Integer, primary_key=True, index=True)
-    
-    # Producto al que pertenece esta ubicación
-    product_id = Column(Integer, ForeignKey("product_references.id", ondelete="CASCADE"), nullable=False, index=True)
+    almacen_id = Column(Integer, ForeignKey("almacenes.id", ondelete="CASCADE"), nullable=False)
+    product_id = Column(Integer, ForeignKey("product_references.id", ondelete="CASCADE"), nullable=False)
     
     # === COMPONENTES DE LA UBICACIÓN ===
     
     # Pasillo del almacén (alfanumérico)
     # Ejemplos: "A", "B", "C", "A1", "B2", "C3", "AA", "BB"
     # Permite letras, números y combinaciones
-    pasillo = Column(String(10), nullable=False, index=True)
+    pasillo = Column(String(10), nullable=True, index=True)
     
     # Lado del pasillo: "IZQUIERDA" o "DERECHA"
     # Se puede usar enum para mayor consistencia
     # Valores permitidos: "IZQUIERDA", "DERECHA", "IZQ", "DER", "L", "R"
-    lado = Column(String(20), nullable=False, index=True)
+    lado = Column(String(20), nullable=True, index=True)
     
     # Ubicación específica dentro del lado
     # Puede ser número ("1", "2", "12") o alfanumérico ("A1", "B3")
-    ubicacion = Column(String(20), nullable=False, index=True)
+    ubicacion = Column(String(20), nullable=True, index=True)
     
     # Altura o nivel vertical
     # Valores típicos: 1, 2, 3, 4, 5
     # 1 = Nivel más bajo (fácil acceso)
     # 5 = Nivel más alto (requiere escalera/elevador)
-    altura = Column(Integer, nullable=False, index=True)
+    altura = Column(Integer, nullable=True, index=True)
     
     # === GESTIÓN DE STOCK ===
     
     # Stock mínimo que debe haber en esta ubicación
     # Cuando el stock actual sea menor, se genera alerta de reposición
-    stock_minimo = Column(Integer, default=0, nullable=False)
+    stock_minimo = Column(Integer, default=0, nullable=True)
     
     # Stock actual en esta ubicación específica (opcional)
     # Puede actualizarse con sistema de inventario
-    stock_actual = Column(Integer, default=0, nullable=False)
+    stock_actual = Column(Integer, default=0, nullable=True)
     
     # === INFORMACIÓN ADICIONAL ===
     
@@ -659,6 +809,7 @@ class ProductLocation(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
+    almacen = relationship("Almacen", back_populates="locations")
     product = relationship("ProductReference", back_populates="locations")
 
     __table_args__ = (
