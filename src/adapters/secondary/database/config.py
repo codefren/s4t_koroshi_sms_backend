@@ -7,7 +7,7 @@ import os
 # Example Connection String for ODBC
 # In a real app, load these from environment variables
 SERVER = os.getenv('DB_SERVER', '127.0.0.1')
-DATABASE = os.getenv('DB_NAME', 's4t_sms')  # Nueva base de datos creada
+DATABASE = os.getenv('DB_NAME', 'S4T_SMS_RESTORE')  # Nueva base de datos creada
 USERNAME = os.getenv('DB_USER', 'sa')
 PASSWORD = os.getenv('DB_PASSWORD', 'YourStrong@Passw0rd')
 # Try ODBC Driver 18 (default for Ubuntu 22.04+), fall back manually if needed

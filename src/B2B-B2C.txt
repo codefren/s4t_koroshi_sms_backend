@@ -23,11 +23,9 @@ crear dos endpoints para B2B
 - type b2b
 - cod client
 - nombre cliente
-- number order
 - updated_at datetime
 - created_at datetime
 - status = leido o no leido
-- phone number
 --------------------------------------------------
 
 GET
@@ -91,3 +89,16 @@ validar si la caja esta en stock
 
 tbd ordenes servicio matricula recepcion
 
+- verificar si la sku esta en mi db si no existe
+- en la pda solicitar el codigo de almacen
+- registro de la orden cuando me venga con el b2b,
+
+
+N varchar, cuando utilizamos nombres, provincias, descripciones, 
+
+
+
+Deuda tecnina
+
+cambiar todos los campos de la db a ingles
+cambiar 

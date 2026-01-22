@@ -5,21 +5,6 @@ from datetime import datetime
 from src.adapters.secondary.database.config import Base
 
 
-class Address(Base):
-    """
-    Direcciones
-    """
-    __tablename__ = "direcciones"
-    id = Column(Integer, primary_key=True, index=True)
-    description = Column(String(100), nullable=True)
-    address = Column(String(100), nullable=True)
-    zipcode = Column(String(10), nullable=True)
-    city = Column(String(50), nullable=True)
-    country = Column(String(50), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow(), nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow(), onupdate=datetime.utcnow(), nullable=False)
-
-
 class Client(Base):
     """
     Clientes
@@ -142,12 +127,11 @@ class Order(Base):
     # Número de orden del sistema externo - identificador único de negocio
     # Viene de la VIEW de SQL Server y agrupa múltiples líneas
     numero_orden = Column(String(100), unique=True, nullable=False, index=True)
-
+    # cada numero de pedido viene de un numero de orden
     numero_pedido = Column(String(100), nullable=True, index=True)
+    type = Column(String(10), nullable=False, index=True)
 
     client = Column(Integer, ForeignKey("clientes.id", ondelete="SET NULL"), nullable=True, index=True)
-
-    address = Column(Integer, ForeignKey("direcciones.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Almacén de origen de la orden
     # NULL = No asignado a almacén específico
@@ -682,13 +666,6 @@ class ProductReference(Base):
     # Posición de la talla en el catálogo (para ordenamiento)
     # Ejemplo: "1", "2", "3" para ordenar XS < S < M < L
     posicion_talla = Column(String(50), nullable=True)
-
-    
-    # Código de barras EAN del producto
-    ean = Column(String(50), nullable=True, index=True)
-
-    # un ean puede tener multiples rf_id y cada rf id es unico
-    rf_id = Column(String(70), nullable=True, index=True)
     
     # SKU o código interno del artículo (referencia - color - talla)
     sku = Column(String(100), nullable=True, index=True)
