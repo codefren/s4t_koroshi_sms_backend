@@ -16,6 +16,56 @@ class Client(Base):
     phone_number = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow(), nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow(), onupdate=datetime.utcnow(), nullable=False)
+
+
+class Customer(Base):
+    """
+    Customers B2B con autenticación API para acceso externo.
+    
+    Customers externos que acceden a la API de servicio B2B.
+    Tienen acceso controlado solo a almacenes específicos asignados.
+    """
+    __tablename__ = "customers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_code = Column(String(50), unique=True, nullable=False, index=True)
+    nombre = Column(String(200), nullable=False)
+    email = Column(String(200), nullable=True, index=True)
+    telefono = Column(String(50), nullable=True)
+    api_key = Column(String(200), unique=True, nullable=True, index=True)
+    api_key_expires_at = Column(DateTime, nullable=True)
+    activo = Column(Boolean, default=True, nullable=False, index=True)
+    ultimo_acceso = Column(DateTime, nullable=True, index=True)
+    ultima_ip = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    almacenes = relationship("Almacen", secondary="customer_almacen", backref="customers")
+
+    __table_args__ = (
+        Index('idx_customer_activo', 'activo'),
+        Index('idx_customer_code_activo', 'customer_code', 'activo'),
+    )
+
+
+class CustomerAlmacen(Base):
+    """
+    Relación many-to-many entre Customers y Almacenes.
+    Define qué almacenes puede acceder cada customer.
+    """
+    __tablename__ = "customer_almacen"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
+    almacen_id = Column(Integer, ForeignKey("almacenes.id", ondelete="CASCADE"), nullable=False, index=True)
+    fecha_asignacion = Column(DateTime, default=datetime.utcnow, nullable=False)
+    notas = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('customer_id', 'almacen_id', name='uq_customer_almacen'),
+        Index('idx_customer_almacen', 'customer_id', 'almacen_id'),
+    )
     
 
 class OrderStatus(Base):
