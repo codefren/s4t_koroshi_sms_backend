@@ -46,6 +46,7 @@ def get_security_config() -> SecurityConfig:
             "http://localhost:3000",
             "http://localhost:5173",
             "http://localhost:8080",
+            "http://127.0.0.1:8004",
         ],
         cors_allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         cors_allow_headers=["*"],
@@ -102,8 +103,12 @@ def get_security_config() -> SecurityConfig:
         ],
         
         # === IP WHITELISTING (Optional) ===
-        # Uncomment to whitelist specific IPs
-        # whitelist=["192.168.1.0/24"],
+        # Whitelist localhost for development and IIS proxy
+        whitelist=[
+            "127.0.0.1",      # IPv4 localhost
+            "::1",            # IPv6 localhost
+            "127.0.0.0/8",    # IPv4 localhost range
+        ],
         
         # === IP BLACKLISTING (Optional) ===
         # Uncomment to blacklist specific IPs
