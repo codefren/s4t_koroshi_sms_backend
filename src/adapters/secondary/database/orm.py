@@ -716,9 +716,6 @@ class ProductReference(Base):
     # Se mantiene como string para flexibilidad
     color_id = Column(String(50), nullable=False, index=True)
     
-    # Nombre corto del color (ej: "Rojo", "Azul", "Negro")
-    color = Column(String(100), nullable=True)
-    
     # Nombre largo/descriptivo del color
     nombre_color = Column(String(100), nullable=True)
     
