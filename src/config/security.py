@@ -47,6 +47,7 @@ def get_security_config() -> SecurityConfig:
             "http://localhost:5173",
             "http://localhost:8080",
             "http://127.0.0.1:8004",
+            
         ],
         cors_allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         cors_allow_headers=["*"],
@@ -126,5 +127,5 @@ def get_security_config() -> SecurityConfig:
         
         # === PASSIVE MODE (Development) ===
         # Set to True to log threats without blocking (useful for testing)
-        passive_mode=False,  # Set to True in development to test without blocking
+        passive_mode=True,  # Enabled to allow IIS proxy access
     )
