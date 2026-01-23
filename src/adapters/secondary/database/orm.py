@@ -249,6 +249,11 @@ class Order(Base):
     # Notas o comentarios adicionales sobre la orden
     notas = Column(Text, nullable=True)
     
+    # Timestamp de cuando el customer B2B visualizó esta orden por primera vez
+    # Se registra solo en la primera consulta a través del API B2B
+    # NULL = Nunca vista por el customer
+    customer_viewed_at = Column(DateTime, nullable=True, index=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -442,6 +447,11 @@ class OrderLine(Base):
     # PARTIAL: Se recogió algo pero no todo (cantidad_servida < cantidad_solicitada)
     # COMPLETED: Se recogió todo (cantidad_servida == cantidad_solicitada)
     estado = Column(String(20), default='PENDING', nullable=False, index=True)
+    
+    # Timestamp de cuando el customer B2B visualizó esta línea de orden por primera vez
+    # Se registra solo en la primera consulta a través del API B2B
+    # NULL = Nunca vista por el customer
+    customer_viewed_at = Column(DateTime, nullable=True, index=True)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -709,13 +719,16 @@ class ProductReference(Base):
     # Nombre corto del color (ej: "Rojo", "Azul", "Negro")
     color = Column(String(100), nullable=True)
     
+    # Nombre largo/descriptivo del color
+    nombre_color = Column(String(100), nullable=True)
+    
     # Talla del producto
     # Ejemplos: "XS", "S", "M", "L", "XL", "XXL", "38", "40", "42"
     talla = Column(String(20), nullable=False, index=True)
     
     # Posición de la talla en el catálogo (para ordenamiento)
-    # Ejemplo: "1", "2", "3" para ordenar XS < S < M < L
-    posicion_talla = Column(String(50), nullable=True)
+    # Ejemplo: 1, 2, 3 para ordenar XS < S < M < L
+    posicion_talla = Column(Integer, nullable=True, index=True)
     
     # SKU o código interno del artículo (referencia - color - talla)
     sku = Column(String(100), nullable=True, index=True)

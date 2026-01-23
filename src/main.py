@@ -1,6 +1,7 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from guard.middleware import SecurityMiddleware
 from src.adapters.secondary.database.config import engine, Base
+from src.config.security import get_security_config
 # from src.adapters.primary.api.router import router as item_router  # LEGACY - Removed InventoryItemModel
 from src.adapters.primary.api.order_router import router as order_router
 from src.adapters.primary.api.operator_router import router as operator_router
@@ -24,14 +25,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FastAPI Hexagonal ODBC", lifespan=lifespan)
 
-# Configuración de CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # URLs del frontend
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Security middleware with comprehensive protection
+# Features: rate limiting, IP banning, penetration detection, security headers, CORS
+app.add_middleware(SecurityMiddleware, config=get_security_config())
 
 # app.include_router(item_router, prefix="/api/v1")  # LEGACY - Removed InventoryItemModel
 app.include_router(order_router, prefix="/api/v1")
