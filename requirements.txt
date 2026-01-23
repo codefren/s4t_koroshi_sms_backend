@@ -6,7 +6,6 @@ certifi==2025.11.12
 charset-normalizer==3.4.4
 click==8.3.1
 fastapi==0.127.0
--e git+ssh://git@github.com/codefren/s4t_koroshi_sms_backend.git@fcd05d67294e0c27948201ea50d84c69c7db5b96#egg=fastapi_hexagonal_odbc
 fastapi_guard==4.2.2
 greenlet==3.3.0
 h11==0.16.0
