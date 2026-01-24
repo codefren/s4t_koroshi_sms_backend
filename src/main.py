@@ -1,7 +1,13 @@
 from fastapi import FastAPI
+import sentry_sdk
 from guard.middleware import SecurityMiddleware
 from src.adapters.secondary.database.config import engine, Base
 from src.config.security import get_security_config
+
+sentry_sdk.init(
+    dsn="https://38c363874205e071124d0d7a3ae3c992@o4510766965325824.ingest.de.sentry.io/4510766970241104",
+    send_default_pii=True,
+)
 # from src.adapters.primary.api.router import router as item_router  # LEGACY - Removed InventoryItemModel
 from src.adapters.primary.api.order_router import router as order_router
 from src.adapters.primary.api.operator_router import router as operator_router
@@ -41,3 +47,7 @@ app.include_router(api_service_router, prefix="/api/service", tags=["B2B Service
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+@app.get("/sentry-debug")
+async def trigger_error():
+    division_by_zero = 1 / 0
