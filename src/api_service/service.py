@@ -84,11 +84,22 @@ def get_customer_b2b_orders(
     
     db.commit()
     
+    # Add total_lines count to each order
+    orders_with_lines = []
+    for order in orders:
+        lines_count = db.query(OrderLine).filter(OrderLine.order_id == order.id).count()
+        order_dict = {
+            "id": order.id,
+            "order_number": order.numero_orden,
+            "total_lines": lines_count
+        }
+        orders_with_lines.append(order_dict)
+    
     return OrdersListResponse(
         total_count=total_count,
         skip=skip,
         limit=limit,
-        orders=orders
+        orders=orders_with_lines
     )
 
 
@@ -159,11 +170,22 @@ def get_customer_b2c_orders(
     
     db.commit()
     
+    # Add total_lines count to each order
+    orders_with_lines = []
+    for order in orders:
+        lines_count = db.query(OrderLine).filter(OrderLine.order_id == order.id).count()
+        order_dict = {
+            "id": order.id,
+            "order_number": order.numero_orden,
+            "total_lines": lines_count
+        }
+        orders_with_lines.append(order_dict)
+    
     return OrdersListResponse(
         total_count=total_count,
         skip=skip,
         limit=limit,
-        orders=orders
+        orders=orders_with_lines
     )
 
 

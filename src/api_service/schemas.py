@@ -34,8 +34,7 @@ class OrderListItem(BaseModel):
     """Minimal order info for listing"""
     id: int
     order_number: str = Field(validation_alias="numero_orden")
-    type: str
-    customer_name: Optional[str] = Field(None, validation_alias="nombre_cliente")
+    total_lines: int
     
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
