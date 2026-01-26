@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from fastapi import HTTPException
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.adapters.secondary.database.orm import (
     Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus
@@ -433,6 +433,13 @@ def batch_update_order(
             detail=f"Order {order_number} is already READY and cannot be updated"
         )
     
+    # 2.1. Check if order has already been updated (fecha_fin_picking set)
+    if order.fecha_fin_picking is not None:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Order {order_number} has already been updated on {order.fecha_fin_picking}. No further updates allowed."
+        )
+    
     # 3. Verify warehouse access
     if order.almacen_id:
         verify_warehouse_access(customer, order.almacen_id, db)
@@ -444,16 +451,18 @@ def batch_update_order(
     
     # 4. Process each line update
     for line_update in lines_updates:
-        # Find or create product by SKU
+        # Find product by SKU (SKU != EAN)
         product = db.query(ProductReference).filter(ProductReference.sku == line_update.sku).first()
         if not product:
-            # Create product with minimal data
+            # Create ProductReference AUTO_CREATED if SKU doesn't exist
             product = ProductReference(
                 sku=line_update.sku,
-                referencia=f"AUTO-{line_update.sku}",
-                nombre_producto=f"Auto-created product {line_update.sku}",
-                color_id="000000",
-                talla="UNI",
+                referencia=f"AUTO-{line_update.sku[:20]}",  # Truncate to avoid overflow
+                nombre_producto=f"AUTO CREATED - {line_update.sku}",
+                color_id="AUTO",
+                nombre_color="Auto Created",
+                talla="N/A",
+                temporada="AUTO_CREATED",  # Mark as auto-created for review
                 activo=True
             )
             db.add(product)
@@ -469,17 +478,25 @@ def batch_update_order(
             # Create new line with AUTO_CREATED status
             # cantidad_solicitada = quantity_served (first time)
             # This allows the line to be updated multiple times
+            
+            # Determine estado based on quantity
+            if line_update.quantity_served > 0:
+                new_estado = 'AUTO_CREATED'
+                lines_completed += 1
+            else:
+                new_estado = 'PENDING'
+                lines_pending += 1
+            
             order_line = OrderLine(
                 order_id=order.id,
                 product_reference_id=product.id,
                 ean=line_update.sku,
-                cantidad_solicitada=line_update.quantity_served,
+                cantidad_solicitada=line_update.quantity_served if line_update.quantity_served > 0 else 1,
                 cantidad_servida=line_update.quantity_served,
-                estado='AUTO_CREATED'
+                estado=new_estado
             )
             db.add(order_line)
             db.flush()
-            lines_completed += 1
         else:
             # Update existing line
             # For AUTO_CREATED lines, allow updating cantidad_solicitada
@@ -535,8 +552,11 @@ def batch_update_order(
                 
                 # Assign to new box
                 order_line.packing_box_id = packing_box.id
-                order_line.fecha_empacado = datetime.utcnow()
+                order_line.fecha_empacado = datetime.now(timezone.utc)
                 packing_box.total_items += 1
+    
+    # Flush changes to DB before counting
+    db.flush()
     
     # 5. Check if ALL lines are completed
     total_lines = db.query(OrderLine).filter(OrderLine.order_id == order.id).count()
@@ -558,6 +578,9 @@ def batch_update_order(
         if pending_status:
             order.status_id = pending_status.id
         order_status_code = 'PENDING'
+    
+    # 7. Mark order as updated (first and only time) - blocks further updates
+    order.fecha_fin_picking = datetime.now(timezone.utc)
     
     db.commit()
     

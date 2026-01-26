@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, Boolean, Text, DateTime, Date, ForeignKey, JSON, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
-from datetime import datetime
+from datetime import datetime, timezone
 from src.adapters.secondary.database.config import Base
 
 
@@ -14,8 +14,8 @@ class Client(Base):
     description = Column(String(100), nullable=False)
     codigo = Column(String(10), nullable=False, index=True)
     phone_number = Column(String(50), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow(), nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow(), onupdate=datetime.utcnow(), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class Customer(Base):
@@ -185,9 +185,7 @@ class Order(Base):
 
     # Almacén de origen de la orden
     # NULL = No asignado a almacén específico
-    almacen_id = Column(Integer, ForeignKey("almacenes.id", ondelete="SET NULL"), nullable=True, index=True)
-
-    type = Column(String(10), nullable=False, index=True)
+    almacen_id = Column(Integer, ForeignKey("almacenes.id", ondelete="SET NULL"), nullable=True, index=True)    
     # === DATOS DEL CLIENTE (desnormalizados) ===
     # Código del cliente del sistema externo
     cliente = Column(String(100), nullable=False, index=True)
@@ -766,8 +764,8 @@ class Almacen(Base):
     id = Column(Integer, primary_key=True, index=True)
     codigo = Column(String(10), nullable=False, index=True)
     descripciones = Column(String(250), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow(), nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow(), onupdate=datetime.utcnow(), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
     # Relationships
     locations = relationship("ProductLocation", back_populates="almacen", cascade="all, delete-orphan")

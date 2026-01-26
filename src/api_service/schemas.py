@@ -73,13 +73,8 @@ class OrderLinesResponse(BaseModel):
 
 class UpdateOrderRequest(BaseModel):
     """Request to update order line quantity"""
-    order_number: str = Field(..., description="Order number to update")
-    sku: str = Field(..., description="SKU of product to update")
-    quantity_served: int = Field(..., ge=0, description="Quantity served")
-    box_code: Optional[str] = Field(None, description="Box tracking code (optional)")
-    
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "order_number": "ORD-12345",
                 "sku": "ABC123",
@@ -87,6 +82,12 @@ class UpdateOrderRequest(BaseModel):
                 "box_code": "BOX-001"
             }
         }
+    )
+    
+    order_number: str = Field(..., description="Order number to update")
+    sku: str = Field(..., description="SKU of product to update")
+    quantity_served: int = Field(..., ge=0, description="Quantity served")
+    box_code: Optional[str] = Field(None, description="Box tracking code (optional)")
 
 
 class UpdateOrderResponse(BaseModel):
@@ -107,11 +108,8 @@ class OrderLineUpdate(BaseModel):
 
 class BatchUpdateOrderRequest(BaseModel):
     """Request to update all lines of an order at once"""
-    order_number: str = Field(..., description="Order number to update")
-    lines: List[OrderLineUpdate] = Field(..., description="List of all order lines to update")
-    
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "order_number": "ORD-12345",
                 "lines": [
@@ -121,6 +119,10 @@ class BatchUpdateOrderRequest(BaseModel):
                 ]
             }
         }
+    )
+    
+    order_number: str = Field(..., description="Order number to update")
+    lines: List[OrderLineUpdate] = Field(..., description="List of all order lines to update")
 
 
 class BatchUpdateOrderResponse(BaseModel):
