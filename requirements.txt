@@ -7,7 +7,6 @@ charset-normalizer==3.4.4
 click==8.3.1
 coverage==7.13.2
 fastapi==0.127.0
--e git+ssh://git@github.com/codefren/s4t_koroshi_sms_backend.git@2fbe28a5cc3a4c8dbc95df8c3fe52900e52c0de5#egg=fastapi_hexagonal_odbc
 fastapi_guard==4.2.2
 greenlet==3.3.0
 h11==0.16.0
