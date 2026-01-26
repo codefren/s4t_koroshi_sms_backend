@@ -98,6 +98,43 @@ class UpdateOrderResponse(BaseModel):
     quantity_served: int
 
 
+class OrderLineUpdate(BaseModel):
+    """Single line update within a batch"""
+    sku: str = Field(..., min_length=8, description="SKU of product (minimum 8 characters)")
+    quantity_served: int = Field(..., ge=0, description="Quantity served for this SKU")
+    box_code: Optional[str] = Field(None, description="Box tracking code (optional)")
+
+
+class BatchUpdateOrderRequest(BaseModel):
+    """Request to update all lines of an order at once"""
+    order_number: str = Field(..., description="Order number to update")
+    lines: List[OrderLineUpdate] = Field(..., description="List of all order lines to update")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "order_number": "ORD-12345",
+                "lines": [
+                    {"sku": "ABC123", "quantity_served": 10, "box_code": "BOX-001"},
+                    {"sku": "DEF456", "quantity_served": 5, "box_code": "BOX-001"},
+                    {"sku": "GHI789", "quantity_served": 0}
+                ]
+            }
+        }
+
+
+class BatchUpdateOrderResponse(BaseModel):
+    """Response after batch update"""
+    status: str
+    message: str
+    order_number: str
+    order_status: str = Field(..., description="Order status after update: PENDING or READY")
+    lines_updated: int
+    lines_completed: int
+    lines_partial: int
+    lines_pending: int
+
+
 # ============================================================================
 # ERROR SCHEMAS
 # ============================================================================

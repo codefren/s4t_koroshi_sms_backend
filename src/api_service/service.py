@@ -8,12 +8,12 @@ from typing import List, Optional
 from datetime import datetime
 
 from src.adapters.secondary.database.orm import (
-    Order, OrderLine, ProductReference, PackingBox, Customer
+    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
     OrderListItem, OrderLineSimple, OrderLinesResponse, UpdateOrderResponse,
-    OrdersListResponse
+    OrdersListResponse, OrderLineUpdate, BatchUpdateOrderResponse
 )
 
 
@@ -48,11 +48,18 @@ def get_customer_b2b_orders(
             orders=[]
         )
     
-    # Build base query
+    # Get PENDING status ID to filter only pending orders
+    pending_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'PENDING').first()
+    
+    # Build base query - only show PENDING orders (not READY)
     base_query = db.query(Order).filter(
         Order.type == 'B2B',
         Order.almacen_id.in_(allowed_warehouses)
     )
+    
+    # Filter only PENDING orders if status exists
+    if pending_status:
+        base_query = base_query.filter(Order.status_id == pending_status.id)
     
     # Apply viewed filter if specified
     if viewed is not None:
@@ -116,11 +123,18 @@ def get_customer_b2c_orders(
             orders=[]
         )
     
-    # Build base query for B2C orders
+    # Get PENDING status ID to filter only pending orders
+    pending_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'PENDING').first()
+    
+    # Build base query for B2C orders - only show PENDING orders (not READY)
     base_query = db.query(Order).filter(
         Order.type == 'B2C',
         Order.almacen_id.in_(allowed_warehouses)
     )
+    
+    # Filter only PENDING orders if status exists
+    if pending_status:
+        base_query = base_query.filter(Order.status_id == pending_status.id)
     
     # Apply viewed filter if specified
     if viewed is not None:
@@ -183,6 +197,14 @@ def get_order_lines_for_customer(
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Check if order is READY - don't allow viewing lines of completed orders
+    order_status = db.query(OrderStatus).filter(OrderStatus.id == order.status_id).first()
+    if order_status and order_status.codigo == 'READY':
+        raise HTTPException(
+            status_code=403, 
+            detail="Order is already completed (READY) and lines are no longer accessible"
+        )
     
     # Verify warehouse access
     if order.almacen_id:
@@ -373,4 +395,179 @@ def update_order_quantity(
         order_number=order.numero_orden,
         sku=sku,
         quantity_served=quantity_served
+    )
+
+
+def batch_update_order(
+    order_number: str,
+    lines_updates: List[OrderLineUpdate],
+    customer: Customer,
+    db: Session
+) -> BatchUpdateOrderResponse:
+    """
+    Update all lines of an order at once in a single transaction.
+    Changes order status to READY if all lines are completed.
+    
+    Args:
+        order_number: Order number to update
+        lines_updates: List of line updates with SKU and quantity
+        customer: Authenticated customer
+        db: Database session
+        
+    Returns:
+        BatchUpdateOrderResponse with update summary
+        
+    Raises:
+        HTTPException: If order not found, access denied, or order already READY
+    """
+    # 1. Find order by order_number
+    order = db.query(Order).filter(Order.numero_orden == order_number).first()
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order {order_number} not found")
+    
+    # 2. Check if order is already READY
+    order_status = db.query(OrderStatus).filter(OrderStatus.id == order.status_id).first()
+    if order_status and order_status.codigo == 'READY':
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Order {order_number} is already READY and cannot be updated"
+        )
+    
+    # 3. Verify warehouse access
+    if order.almacen_id:
+        verify_warehouse_access(customer, order.almacen_id, db)
+    
+    # Counters
+    lines_completed = 0
+    lines_partial = 0
+    lines_pending = 0
+    
+    # 4. Process each line update
+    for line_update in lines_updates:
+        # Find or create product by SKU
+        product = db.query(ProductReference).filter(ProductReference.sku == line_update.sku).first()
+        if not product:
+            # Create product with minimal data
+            product = ProductReference(
+                sku=line_update.sku,
+                referencia=f"AUTO-{line_update.sku}",
+                nombre_producto=f"Auto-created product {line_update.sku}",
+                color_id="000000",
+                talla="UNI",
+                activo=True
+            )
+            db.add(product)
+            db.flush()
+        
+        # Find existing order_line
+        order_line = db.query(OrderLine).filter(
+            OrderLine.order_id == order.id,
+            OrderLine.product_reference_id == product.id
+        ).first()
+        
+        if not order_line:
+            # Create new line with AUTO_CREATED status
+            # cantidad_solicitada = quantity_served (first time)
+            # This allows the line to be updated multiple times
+            order_line = OrderLine(
+                order_id=order.id,
+                product_reference_id=product.id,
+                ean=line_update.sku,
+                cantidad_solicitada=line_update.quantity_served,
+                cantidad_servida=line_update.quantity_served,
+                estado='AUTO_CREATED'
+            )
+            db.add(order_line)
+            db.flush()
+            lines_completed += 1
+        else:
+            # Update existing line
+            # For AUTO_CREATED lines, allow updating cantidad_solicitada
+            if order_line.estado == 'AUTO_CREATED' and line_update.quantity_served > order_line.cantidad_solicitada:
+                order_line.cantidad_solicitada = line_update.quantity_served
+            
+            # Update cantidad_servida
+            order_line.cantidad_servida = line_update.quantity_served
+            
+            # Update estado based on quantity compared to cantidad_solicitada
+            if line_update.quantity_served >= order_line.cantidad_solicitada:
+                order_line.estado = 'COMPLETED'
+                lines_completed += 1
+            elif line_update.quantity_served > 0:
+                order_line.estado = 'PARTIAL'
+                lines_partial += 1
+            else:
+                order_line.estado = 'PENDING'
+                lines_pending += 1
+        
+        # Handle packing box if box_code provided
+        if line_update.box_code:
+            # Find or create packing box
+            packing_box = db.query(PackingBox).filter(
+                PackingBox.codigo_caja == line_update.box_code
+            ).first()
+            
+            if not packing_box:
+                # Create new packing box as CLOSED (products already served)
+                max_numero = db.query(PackingBox).filter(
+                    PackingBox.order_id == order.id
+                ).count()
+                
+                packing_box = PackingBox(
+                    order_id=order.id,
+                    numero_caja=max_numero + 1,
+                    codigo_caja=line_update.box_code,
+                    estado='CLOSED',
+                    total_items=0
+                )
+                db.add(packing_box)
+                db.flush()
+            
+            # Assign order_line to packing_box
+            if order_line.packing_box_id != packing_box.id:
+                # If was in another box, decrement that box's count
+                if order_line.packing_box_id:
+                    old_box = db.query(PackingBox).filter(
+                        PackingBox.id == order_line.packing_box_id
+                    ).first()
+                    if old_box:
+                        old_box.total_items = max(0, old_box.total_items - 1)
+                
+                # Assign to new box
+                order_line.packing_box_id = packing_box.id
+                order_line.fecha_empacado = datetime.utcnow()
+                packing_box.total_items += 1
+    
+    # 5. Check if ALL lines are completed
+    total_lines = db.query(OrderLine).filter(OrderLine.order_id == order.id).count()
+    completed_lines = db.query(OrderLine).filter(
+        OrderLine.order_id == order.id,
+        OrderLine.estado == 'COMPLETED'
+    ).count()
+    
+    # 6. Update order status to READY if all lines completed
+    if completed_lines == total_lines and total_lines > 0:
+        ready_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'READY').first()
+        if ready_status:
+            order.status_id = ready_status.id
+            order_status_code = 'READY'
+        else:
+            order_status_code = 'PENDING'
+    else:
+        pending_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'PENDING').first()
+        if pending_status:
+            order.status_id = pending_status.id
+        order_status_code = 'PENDING'
+    
+    db.commit()
+    
+    return BatchUpdateOrderResponse(
+        status="success",
+        message=f"Updated {len(lines_updates)} lines for order {order_number}",
+        order_number=order_number,
+        order_status=order_status_code,
+        lines_updated=len(lines_updates),
+        lines_completed=lines_completed,
+        lines_partial=lines_partial,
+        lines_pending=lines_pending
     )

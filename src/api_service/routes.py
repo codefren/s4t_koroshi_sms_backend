@@ -14,13 +14,16 @@ from src.api_service.schemas import (
     OrderLinesResponse,
     UpdateOrderRequest,
     UpdateOrderResponse,
-    CustomerResponse
+    CustomerResponse,
+    BatchUpdateOrderRequest,
+    BatchUpdateOrderResponse
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
     get_customer_b2c_orders,
     get_order_lines_for_customer,
-    update_order_quantity
+    update_order_quantity,
+    batch_update_order
 )
 
 
@@ -179,30 +182,32 @@ async def get_order_lines(
 
 
 @router.put(
-    "/orders/update",
-    response_model=UpdateOrderResponse,
+    "/orders/batch-update",
+    response_model=BatchUpdateOrderResponse,
     tags=["Orders"]
 )
-async def update_order(
-    request: UpdateOrderRequest,
+async def batch_update_order_endpoint(
+    request: BatchUpdateOrderRequest,
     customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
 ):
     """
-    Update quantity served for a product in an order.
+    Update ALL lines of an order at once (Batch Update).
     
-    This endpoint allows customers to:
-    - Update the quantity served for a specific product
-    - Automatically create the product if it doesn't exist
-    - Optionally assign items to a packing box using box_code
+    This endpoint processes all order lines in a single transaction:
+    - Updates quantity served for all products
+    - Automatically changes order status to READY when all lines completed
+    - Orders with READY status disappear from order lists
+    - Optionally assigns items to packing boxes
     
-    **Product Auto-creation:**
-    If the SKU doesn't exist in the system, a new product will be created
-    automatically with minimal required data.
+    **Order Status Logic:**
+    - If ALL lines have quantity_served >= quantity_requested → Order status = READY
+    - Otherwise → Order status = PENDING
     
-    **Packing Box Assignment:**
-    If `box_code` is provided, the order line will be assigned to that box.
-    If the box doesn't exist, it will be created.
+    **READY Orders:**
+    - Automatically filtered from /orders/b2b and /orders/b2c endpoints
+    - Cannot access lines via /orders/{id}/lines
+    - Cannot be updated again
     
     **Authentication:** Requires X-Api-Key header
     
@@ -212,26 +217,55 @@ async def update_order(
          -H "Content-Type: application/json" \
          -d '{
            "order_number": "ORD-12345",
-           "sku": "ABC123",
-           "quantity_served": 10,
-           "box_code": "BOX-001"
+           "lines": [
+             {"sku": "ABC123", "quantity_served": 10, "box_code": "BOX-001"},
+             {"sku": "DEF456", "quantity_served": 5, "box_code": "BOX-001"},
+             {"sku": "GHI789", "quantity_served": 0}
+           ]
          }' \
-         http://localhost:8000/api/service/orders/update
+         http://localhost:8000/api/service/orders/batch-update
     ```
     
     **Response:**
     ```json
     {
         "status": "success",
-        "message": "Updated ABC123 quantity to 10",
-        "order_id": 123,
+        "message": "Updated 3 lines for order ORD-12345",
         "order_number": "ORD-12345",
-        "order_line_id": 456,
-        "sku": "ABC123",
-        "quantity_served": 10,
-        "previous_quantity": 5
+        "order_status": "READY",
+        "lines_updated": 3,
+        "lines_completed": 2,
+        "lines_partial": 0,
+        "lines_pending": 1
     }
     ```
+    """
+    return batch_update_order(
+        order_number=request.order_number,
+        lines_updates=request.lines,
+        customer=customer,
+        db=db
+    )
+
+
+@router.put(
+    "/orders/update",
+    response_model=UpdateOrderResponse,
+    tags=["Orders"],
+    deprecated=True
+)
+async def update_order(
+    request: UpdateOrderRequest,
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    **DEPRECATED:** Use /orders/batch-update instead.
+    
+    Update quantity served for a product in an order (single line).
+    
+    This endpoint is deprecated. Please use /orders/batch-update to update
+    all lines of an order at once.
     """
     return update_order_quantity(
         order_number=request.order_number,
