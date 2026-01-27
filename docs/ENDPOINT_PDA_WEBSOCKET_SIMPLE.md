@@ -1,7 +1,7 @@
 # 📡 WebSocket para PDA - Versión Simplificada
 
-**Fecha:** 2026-01-07  
-**Objetivo:** WebSocket SOLO para escaneo de productos en tiempo real
+**Fecha:** 2026-01-12 (Actualizado)  
+**Versión:** 2.0 - Con Sistema de Cajas de Embalaje
 
 ---
 
@@ -9,23 +9,35 @@
 
 **WebSocket se usa ÚNICAMENTE para:** Escanear códigos EAN  
 **Todo lo demás:** HTTP REST  
-**Autenticación:** Solo operator_id (sin tokens)
+**Autenticación:** Solo codigo_operario (sin tokens)  
+**Nuevo:** Sistema de cajas de embalaje automático integrado
 
 ---
 
 ## 🏗️ Arquitectura
 
-### REST API (Control de flujo)
+### REST API (Control de flujo y cajas)
 ```
-POST  /api/v1/operators/{id}/orders/{id}/start-picking   ← Iniciar
-POST  /api/v1/operators/{id}/orders/{id}/complete-picking← Completar  
-GET   /api/v1/operators/{id}/orders                      ← Listar órdenes
-GET   /api/v1/operators/{id}/orders/{id}/lines           ← Listar productos
+# Workflow Principal
+POST  /api/v1/orders/{id}/start-picking     ← Iniciar picking + Crea Caja #1 automáticamente
+POST  /api/v1/orders/{id}/complete-picking  ← Completar picking + Cierra caja activa
+
+# Gestión de Cajas (Durante el picking)
+POST  /api/v1/packing-boxes/orders/{id}/boxes        ← Abrir nueva caja
+PUT   /api/v1/packing-boxes/{box_id}/close           ← Cerrar caja llena
+GET   /api/v1/packing-boxes/orders/{id}/boxes        ← Listar cajas de la orden
+
+# Empaque de Items (Automático al escanear)
+PUT   /api/v1/packing-boxes/order-lines/{id}/pack    ← Empacar item en caja activa
+
+# Consultas
+GET   /api/v1/operators/{codigo}/orders              ← Listar órdenes asignadas
+GET   /api/v1/operators/{codigo}/orders/{id}/lines   ← Listar productos de orden
 ```
 
 ### WebSocket (SOLO escaneo)
 ```
-WS /ws/operators/{operator_id}
+WS /ws/operators/{codigo_operario}
 
 Único flujo:
   1. Operario escanea EAN → Envía SCAN_PRODUCT
@@ -35,22 +47,24 @@ WS /ws/operators/{operator_id}
 
 ---
 
-## 🔄 Flujo Completo de Trabajo
+## 🔄 Flujo Completo de Trabajo (Con Cajas de Embalaje)
 
 ```
-1. GET /operators/1/orders
+1. GET /operators/OP001/orders
    → [ORD1001, ORD1002]
 
-2. POST /operators/1/orders/123/start-picking
+2. POST /api/v1/orders/123/start-picking
    → Estado: IN_PICKING ✓
+   → Caja #1 creada automáticamente (ORD-123-BOX-001) ✓
+   → Caja activa: Caja #1
 
-3. GET /operators/1/orders/123/lines
-   → 15 productos
+3. GET /operators/OP001/orders/123/lines
+   → 15 productos para recoger
 
-4. WS Connect ws://localhost:8000/ws/operators/1
+4. WS Connect ws://localhost:8000/ws/operators/OP001
    → Conectado ✓
 
-5. LOOP: Para cada producto (escanear 5 veces el mismo EAN):
+5. LOOP: Para cada producto (escanear hasta completar):
    
    Operario escanea → PDA envía:
    {
@@ -70,12 +84,33 @@ WS /ws/operators/{operator_id}
        "cantidad_actual": 3,      ← Incrementado +1
        "cantidad_solicitada": 5,
        "cantidad_pendiente": 2,
-       "progreso": 60.0
+       "progreso_linea": 60.0,
+       "progreso_orden": {
+         "total_items": 15,
+         "items_completados": 8,
+         "progreso_porcentaje": 53.33
+       }
      }
    }
+   
+   ✅ Item automáticamente empacado en Caja #1
 
-6. POST /operators/1/orders/123/complete-picking
+6. [OPCIONAL] Si la Caja #1 se llena:
+   
+   PUT /api/v1/packing-boxes/{box_id}/close
+   Body: {"peso_kg": 5.5, "dimensiones": "40x30x20"}
+   → Caja #1 cerrada ✓
+   
+   POST /api/v1/packing-boxes/orders/123/boxes
+   → Caja #2 abierta (ORD-123-BOX-002) ✓
+   → Caja activa: Caja #2
+   
+   Continuar escaneando → Items se empaquetan en Caja #2
+
+7. POST /api/v1/orders/123/complete-picking
    → Estado: PICKED ✓
+   → Caja activa cerrada automáticamente ✓
+   → Total cajas: 2 ✓
 ```
 
 ---
@@ -84,7 +119,8 @@ WS /ws/operators/{operator_id}
 
 ### Conectar (Sin Token)
 ```javascript
-const ws = new WebSocket('ws://localhost:8000/ws/operators/1');
+const operadorCodigo = 'OP001';  // Código del operario
+const ws = new WebSocket(`ws://localhost:8000/ws/operators/${operadorCodigo}`);
 
 ws.onopen = () => {
   console.log('Conectado ✓');
@@ -96,7 +132,7 @@ ws.onmessage = (event) => {
 };
 ```
 
-**Validación server:** Solo verifica que `operator_id` existe y está activo.
+**Validación server:** Solo verifica que `codigo_operario` existe y está activo.
 
 ---
 
@@ -132,11 +168,18 @@ escanearProducto(123, '8445962763983', 'A-IZQ-12-H2');
 ```
 
 **Parámetros:**
-- `order_id` (int, requerido): ID de la orden activa
+- `order_id` (int, requerido*): ID numérico de la orden activa
+- `numero_orden` (string, requerido*): Número de orden (ej: "ORD1000") - alternativa a `order_id`
 - `ean` (string, requerido): Código EAN escaneado
 - `ubicacion` (string, opcional): Ubicación desde donde se escanea
 
-**Efecto:** Incrementa `cantidad_servida` en +1 para ese EAN
+**Nota:** Debes enviar `order_id` O `numero_orden` (no ambos). Se recomienda usar `order_id`.
+
+**Efectos automáticos:**
+1. Incrementa `cantidad_servida` en +1 para ese EAN
+2. 🎁 **NUEVO:** Empaca automáticamente el item en la caja activa
+3. Actualiza `total_items` de la caja
+4. Registra `fecha_empacado` del item
 
 ---
 
@@ -415,8 +458,8 @@ app.include_router(operator_websocket.router, tags=["WebSocket"])
 // useOperatorWebSocket.js
 
 class OperatorWebSocket {
-  constructor(operatorId) {
-    this.operatorId = operatorId;
+  constructor(operadorCodigo) {
+    this.operadorCodigo = operadorCodigo;  // Ej: "OP001", "OP002"
     this.ws = null;
     this.onScanConfirmed = null;
     this.onScanError = null;
@@ -425,7 +468,7 @@ class OperatorWebSocket {
   
   connect() {
     this.ws = new WebSocket(
-      `ws://localhost:8000/ws/operators/${this.operatorId}`
+      `ws://localhost:8000/ws/operators/${this.operadorCodigo}`
     );
     
     this.ws.onopen = () => {
@@ -478,7 +521,7 @@ class OperatorWebSocket {
 }
 
 // Uso en React/Vue
-const operatorWS = new OperatorWebSocket(1);
+const operatorWS = new OperatorWebSocket('OP001');  // Usar código del operario
 
 operatorWS.onScanConfirmed = (data) => {
   console.log('✅ Escaneado:', data);
@@ -506,26 +549,102 @@ function onBarcodeScanned(ean) {
 
 ---
 
-## ✅ Resumen
+## ✅ Resumen de Endpoints
 
+### Workflow Principal
 | Operación | Método | Endpoint |
 |-----------|--------|----------|
-| **Listar órdenes** | GET | `/api/v1/operators/{id}/orders` |
-| **Ver productos** | GET | `/api/v1/operators/{id}/orders/{id}/lines` |
-| **Iniciar picking** | POST | `/api/v1/operators/{id}/orders/{id}/start-picking` |
-| **Escanear producto** | WS | `/ws/operators/{id}` ⚡ |
-| **Completar picking** | POST | `/api/v1/operators/{id}/orders/{id}/complete-picking` |
+| **Listar órdenes** | GET | `/api/v1/operators/{codigo}/orders` |
+| **Ver productos** | GET | `/api/v1/operators/{codigo}/orders/{id}/lines` |
+| **Iniciar picking** | POST | `/api/v1/orders/{id}/start-picking` 🎁 |
+| **Escanear producto** | WS | `/ws/operators/{codigo}` ⚡ |
+| **Completar picking** | POST | `/api/v1/orders/{id}/complete-picking` 🎁 |
+
+🎁 = Crea/cierra cajas automáticamente
+
+### Gestión de Cajas (Opcional)
+| Operación | Método | Endpoint |
+|-----------|--------|----------|
+| **Abrir nueva caja** | POST | `/api/v1/packing-boxes/orders/{id}/boxes` |
+| **Cerrar caja** | PUT | `/api/v1/packing-boxes/{box_id}/close` |
+| **Listar cajas** | GET | `/api/v1/packing-boxes/orders/{id}/boxes` |
+| **Ver caja + items** | GET | `/api/v1/packing-boxes/{box_id}` |
+| **Empacar item** | PUT | `/api/v1/packing-boxes/order-lines/{line_id}/pack` |
+
+---
+
+## 📦 Sistema de Cajas de Embalaje (Nuevo en v2.0)
+
+### ¿Qué es?
+Sistema automático de gestión de cajas físicas durante el proceso de picking.
+
+### ¿Cómo funciona?
+
+1. **Al iniciar picking** → Se crea automáticamente **Caja #1** (estado: OPEN)
+   - Código: `ORD-123-BOX-001` (escaneable)
+   - Todos los items escaneados se empaquetan aquí
+
+2. **Durante el picking** → Cada item escaneado:
+   - Se empaca automáticamente en la caja activa
+   - Se registra `fecha_empacado`
+   - Se incrementa `total_items` de la caja
+
+3. **Si la caja se llena** → El operario puede:
+   - Cerrar Caja #1 (registrar peso y dimensiones)
+   - Abrir Caja #2 automáticamente
+   - Continuar escaneando items → van a Caja #2
+
+4. **Al completar picking** → El sistema:
+   - Cierra automáticamente la caja activa
+   - Valida que todos los items estén empacados
+   - Registra total de cajas utilizadas
+
+### Ventajas
+- 📦 **Trazabilidad:** Cada item sabe en qué caja está
+- 📊 **Estadísticas:** Peso y dimensiones por caja
+- 🔍 **Códigos escaneables:** Cada caja tiene código único
+- ⚙️ **Automático:** El PDA no necesita gestionar cajas manualmente
+- 📝 **Auditoría:** Historial completo de apertura/cierre
+
+### Reglas
+- ⚠️ Solo **1 caja OPEN** por orden a la vez
+- ⚠️ Todos los items deben estar empacados antes de completar
+- ✅ Puede haber **múltiples cajas** por orden (1, 2, 3... N)
+
+### Endpoints Principales
+```javascript
+// Abrir nueva caja manualmente (si la actual se llenó)
+POST /api/v1/packing-boxes/orders/123/boxes
+Body: {"notas": "Caja para items grandes"}
+
+// Cerrar caja actual
+PUT /api/v1/packing-boxes/456/close
+Body: {
+  "peso_kg": 5.5,
+  "dimensiones": "40x30x20 cm",
+  "notas": "Caja completa"
+}
+
+// Ver todas las cajas de la orden
+GET /api/v1/packing-boxes/orders/123/boxes
+
+// Ver detalle de una caja + items dentro
+GET /api/v1/packing-boxes/456
+```
+
+**Documentación completa:** Ver `PACKING_BOXES_SYSTEM.md`
 
 ---
 
 ## 🎯 Ventajas de esta arquitectura
 
 - ✅ **Simple:** Solo 1 mensaje WebSocket (SCAN_PRODUCT)
-- ✅ **Sin tokens:** Solo operator_id
+- ✅ **Sin tokens:** Solo codigo_operario
 - ✅ **Rápido:** Feedback < 50ms
 - ✅ **REST para control:** Iniciar/completar sigue siendo HTTP
 - ✅ **Fácil de probar:** WebSocket solo para escaneo
 - ✅ **Incremental +1:** Cada escaneo = +1 automático
+- ✅ **Cajas automáticas:** Sistema de empaque integrado
 
 ---
 
@@ -544,12 +663,31 @@ touch src/adapters/primary/websocket/operator_websocket.py
 pip install websockets
 
 # 4. Probar
-# Conectar: ws://localhost:8000/ws/operators/1
+# Conectar: ws://localhost:8000/ws/operators/OP001
 # Enviar: {"action": "scan_product", "data": {"order_id": 1, "ean": "123"}}
 ```
 
 ---
 
-**Versión:** 1.0 Simplificada  
-**Fecha:** 2026-01-07  
-**Estado:** ✅ Listo para implementar
+## 📝 Cambios en esta Versión
+
+### v2.0 (2026-01-12)
+- ✅ Sistema de cajas de embalaje integrado
+- ✅ Empaque automático de items al escanear
+- ✅ Workflow automatizado: start-picking crea Caja #1
+- ✅ Workflow automatizado: complete-picking cierra caja activa
+- ✅ Gestión de múltiples cajas por orden
+- ✅ Códigos de caja escaneables (únicos)
+- ✅ Trazabilidad completa item-caja
+- ✅ 14 nuevos endpoints para gestión de cajas
+
+### v1.1 (2026-01-08)
+- ✅ Usa codigo_operario en lugar de ID numérico
+- ✅ Validación de operario al conectar
+
+---
+
+**Versión Actual:** 2.0 - Con Sistema de Cajas de Embalaje  
+**Fecha:** 2026-01-12  
+**Estado:** ✅ Actualizado y listo para producción  
+**Documentación relacionada:** `PACKING_BOXES_SYSTEM.md`
