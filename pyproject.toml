@@ -10,7 +10,8 @@ dependencies = [
     "pydantic",
     "pydantic-settings",
     "pyodbc",
-    "python-json-logger"
+    "python-json-logger",
+    "fastapi-guard"
 ]
 
 [build-system]
