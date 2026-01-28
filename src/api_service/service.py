@@ -471,16 +471,29 @@ def batch_update_order(
     lines_partial = 0
     lines_pending = 0
     
-    # 4. Process each line update
+    # 4. Group line updates by SKU and accumulate quantities
+    # This allows multiple updates of the same SKU to be cumulative
+    sku_quantities = {}
+    sku_box_codes = {}
     for line_update in lines_updates:
+        if line_update.sku not in sku_quantities:
+            sku_quantities[line_update.sku] = 0
+            sku_box_codes[line_update.sku] = line_update.box_code
+        sku_quantities[line_update.sku] += line_update.quantity_served
+        # Use last box_code if multiple provided for same SKU
+        if line_update.box_code:
+            sku_box_codes[line_update.sku] = line_update.box_code
+    
+    # 5. Process each unique SKU with accumulated quantity
+    for sku, accumulated_quantity in sku_quantities.items():
         # Find product by SKU (SKU != EAN)
-        product = db.query(ProductReference).filter(ProductReference.sku == line_update.sku).first()
+        product = db.query(ProductReference).filter(ProductReference.sku == sku).first()
         if not product:
             # Create ProductReference AUTO_CREATED if SKU doesn't exist
             product = ProductReference(
-                sku=line_update.sku,
-                referencia=f"AUTO-{line_update.sku[:20]}",  # Truncate to avoid overflow
-                nombre_producto=f"AUTO CREATED - {line_update.sku}",
+                sku=sku,
+                referencia=f"AUTO-{sku[:20]}",  # Truncate to avoid overflow
+                nombre_producto=f"AUTO CREATED - {sku}",
                 color_id="AUTO",
                 nombre_color="Auto Created",
                 talla="N/A",
@@ -502,7 +515,7 @@ def batch_update_order(
             # This allows the line to be updated multiple times
             
             # Determine estado based on quantity
-            if line_update.quantity_served > 0:
+            if accumulated_quantity > 0:
                 new_estado = 'AUTO_CREATED'
                 lines_completed += 1
             else:
@@ -512,27 +525,27 @@ def batch_update_order(
             order_line = OrderLine(
                 order_id=order.id,
                 product_reference_id=product.id,
-                ean=line_update.sku,
-                cantidad_solicitada=line_update.quantity_served if line_update.quantity_served > 0 else 1,
-                cantidad_servida=line_update.quantity_served,
+                ean=sku,
+                cantidad_solicitada=accumulated_quantity if accumulated_quantity > 0 else 1,
+                cantidad_servida=accumulated_quantity,
                 estado=new_estado
             )
             db.add(order_line)
             db.flush()
         else:
-            # Update existing line
+            # Update existing line - ACCUMULATE quantities
             # For AUTO_CREATED lines, allow updating cantidad_solicitada
-            if order_line.estado == 'AUTO_CREATED' and line_update.quantity_served > order_line.cantidad_solicitada:
-                order_line.cantidad_solicitada = line_update.quantity_served
+            if order_line.estado == 'AUTO_CREATED' and accumulated_quantity > order_line.cantidad_solicitada:
+                order_line.cantidad_solicitada = accumulated_quantity
             
-            # Update cantidad_servida
-            order_line.cantidad_servida = line_update.quantity_served
+            # Update cantidad_servida with accumulated quantity
+            order_line.cantidad_servida = accumulated_quantity
             
             # Update estado based on quantity compared to cantidad_solicitada
-            if line_update.quantity_served >= order_line.cantidad_solicitada:
+            if accumulated_quantity >= order_line.cantidad_solicitada:
                 order_line.estado = 'COMPLETED'
                 lines_completed += 1
-            elif line_update.quantity_served > 0:
+            elif accumulated_quantity > 0:
                 order_line.estado = 'PARTIAL'
                 lines_partial += 1
             else:
@@ -540,10 +553,11 @@ def batch_update_order(
                 lines_pending += 1
         
         # Handle packing box if box_code provided
-        if line_update.box_code:
+        box_code = sku_box_codes.get(sku)
+        if box_code:
             # Find or create packing box
             packing_box = db.query(PackingBox).filter(
-                PackingBox.codigo_caja == line_update.box_code
+                PackingBox.codigo_caja == box_code
             ).first()
             
             if not packing_box:
@@ -555,7 +569,7 @@ def batch_update_order(
                 packing_box = PackingBox(
                     order_id=order.id,
                     numero_caja=max_numero + 1,
-                    codigo_caja=line_update.box_code,
+                    codigo_caja=box_code,
                     estado='CLOSED',
                     total_items=0
                 )
