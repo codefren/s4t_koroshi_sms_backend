@@ -317,3 +317,59 @@ class TestBatchUpdateValidations:
         assert result.lines_updated == 3
         assert result.lines_completed == 2  # SKU-001 y SKU-002
         assert result.lines_pending == 1    # SKU-003
+    
+    def test_cumulative_quantity_served_for_same_sku(self, test_db, pending_order, test_customer, sample_product):
+        """
+        Test: Cantidad servida debe acumularse cuando múltiples updates del mismo SKU 
+        se envían en una sola llamada a batch_update_order.
+        
+        Restricción: Una orden solo tiene UN order_line por SKU.
+        
+        Escenario:
+        - Orden con 1 línea: SKU "TEST-SKU", solicitado: 30, servido: 0
+        - Batch update con 3 entradas del mismo SKU: [10, 5, 5]
+        - Resultado esperado: cantidad_servida = 20 (10+5+5 acumulado), estado = PARTIAL
+        """
+        # Limpiar líneas existentes
+        test_db.query(OrderLine).filter(OrderLine.order_id == pending_order.id).delete()
+        
+        # Crear UNA sola línea con cantidad solicitada = 30
+        order_line = OrderLine(
+            order_id=pending_order.id,
+            product_reference_id=sample_product.id,
+            ean=sample_product.sku,
+            cantidad_solicitada=30,
+            cantidad_servida=0,
+            estado="PENDING"
+        )
+        test_db.add(order_line)
+        test_db.commit()
+        test_db.refresh(order_line)
+        
+        # Actualizar con MÚLTIPLES entradas del mismo SKU en una sola llamada
+        lines_updates = [
+            OrderLineUpdate(sku=sample_product.sku, quantity_served=10),
+            OrderLineUpdate(sku=sample_product.sku, quantity_served=5),
+            OrderLineUpdate(sku=sample_product.sku, quantity_served=5)
+        ]
+        
+        result = batch_update_order(
+            order_number=pending_order.numero_orden,
+            lines_updates=lines_updates,
+            customer=test_customer,
+            db=test_db
+        )
+        
+        # Refrescar línea desde DB
+        test_db.refresh(order_line)
+        
+        # Verificar acumulación correcta: 10 + 5 + 5 = 20
+        assert order_line.cantidad_servida == 20, \
+            f"Línea debe tener 20 servido (10+5+5), tiene {order_line.cantidad_servida}"
+        assert order_line.estado == "PARTIAL", \
+            f"Línea debe estar PARTIAL (20/30), está {order_line.estado}"
+        
+        # Verificar contadores del resultado
+        assert result.lines_updated == 3, "Debe reportar 3 líneas actualizadas"
+        assert result.lines_partial == 1, "Debe haber 1 línea parcial"
+        assert result.order_status == "PENDING", "Orden debe permanecer PENDING"
