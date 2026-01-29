@@ -22,7 +22,7 @@ def get_customer_b2b_orders(
     db: Session,
     skip: int = 0,
     limit: int = 100,
-    viewed: Optional[bool] = None
+    viewed: Optional[bool] = False
 ) -> OrdersListResponse:
     """
     Get B2B orders for customer filtered by assigned warehouses.
@@ -108,7 +108,7 @@ def get_customer_b2c_orders(
     db: Session,
     skip: int = 0,
     limit: int = 100,
-    viewed: Optional[bool] = None
+    viewed: Optional[bool] = False
 ) -> OrdersListResponse:
     """
     Get B2C orders for customer filtered by assigned warehouses.
@@ -195,7 +195,7 @@ def get_order_lines_for_customer(
     db: Session,
     skip: int = 0,
     limit: int = 100,
-    viewed: Optional[bool] = None
+    viewed: Optional[bool] = False
 ) -> OrderLinesResponse:
     """
     Get order lines with SKU and quantity for a specific order.
@@ -500,10 +500,11 @@ def batch_update_order(
                 sku=sku,
                 referencia=f"AUTO-{sku[:20]}",  # Truncate to avoid overflow
                 nombre_producto=f"AUTO CREATED - {sku}",
-                color_id="AUTO",
-                nombre_color="Auto Created",
-                talla="N/A",
-                temporada="AUTO_CREATED",  # Mark as auto-created for review
+                color_id="000000",
+                nombre_color="",
+                talla="U",
+                posicion_talla=1,  # Default position for auto-created products
+                temporada="0",  # Mark as auto-created for review
                 activo=True
             )
             db.add(product)
