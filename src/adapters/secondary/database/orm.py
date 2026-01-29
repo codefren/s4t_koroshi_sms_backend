@@ -355,6 +355,7 @@ class PackingBox(Base):
     order = relationship("Order", back_populates="packing_boxes", foreign_keys=[order_id])
     operator = relationship("Operator", backref="packing_boxes")
     order_lines = relationship("OrderLine", back_populates="packing_box")
+    line_distributions = relationship("OrderLineBoxDistribution", back_populates="packing_box", cascade="all, delete-orphan")
 
     __table_args__ = (
         # No duplicar número de caja en la misma orden
@@ -363,6 +364,62 @@ class PackingBox(Base):
         Index('idx_order_estado', 'order_id', 'estado'),
         # Índice para búsqueda por código de caja
         Index('idx_codigo_caja', 'codigo_caja'),
+    )
+
+
+class OrderLineBoxDistribution(Base):
+    """
+    Tabla de distribución de order_lines entre múltiples packing_boxes.
+    
+    Permite que una order_line (un SKU específico) se distribuya en múltiples cajas.
+    Por ejemplo: Un pedido de 100 unidades puede estar distribuido en:
+    - BOX-A: 40 unidades
+    - BOX-B: 35 unidades
+    - BOX-C: 25 unidades
+    
+    Esta tabla registra cada distribución individual, permitiendo trazabilidad
+    completa de qué cantidad de cada producto está en cada caja.
+    """
+    __tablename__ = "order_line_box_distribution"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # OrderLine que está siendo distribuida
+    order_line_id = Column(
+        Integer, 
+        ForeignKey("order_lines.id", ondelete="NO ACTION"), 
+        nullable=False, 
+        index=True
+    )
+    
+    # Caja donde está una parte de esta order_line
+    packing_box_id = Column(
+        Integer, 
+        ForeignKey("packing_boxes.id", ondelete="NO ACTION"), 
+        nullable=False, 
+        index=True
+    )
+    
+    # Cantidad específica de esta order_line en esta caja
+    # La suma de quantity_in_box de todos los registros de una order_line
+    # debe coincidir con order_line.cantidad_servida
+    quantity_in_box = Column(Integer, nullable=False)
+    
+    # Fecha cuando se empacó esta cantidad en esta caja
+    fecha_empacado = Column(DateTime(timezone=True), nullable=True)
+    
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    
+    # Relationships
+    order_line = relationship("OrderLine", back_populates="box_distributions")
+    packing_box = relationship("PackingBox", back_populates="line_distributions")
+    
+    __table_args__ = (
+        # Índice compuesto para búsquedas por order_line
+        Index('idx_orderline_box', 'order_line_id', 'packing_box_id'),
+        # Índice para buscar todas las distribuciones de una caja
+        Index('idx_box_distributions', 'packing_box_id'),
     )
 
 
@@ -461,8 +518,11 @@ class OrderLine(Base):
     product_reference = relationship("ProductReference", backref="order_lines")
     product_location = relationship("ProductLocation", backref="order_lines")
     
-    # Relación con la caja de embalaje
+    # Relación con la caja de embalaje (legacy - para compatibilidad)
     packing_box = relationship("PackingBox", back_populates="order_lines")
+    
+    # Relación con distribución de cajas (nueva arquitectura)
+    box_distributions = relationship("OrderLineBoxDistribution", back_populates="order_line", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index('idx_order_estado', 'order_id', 'estado'),

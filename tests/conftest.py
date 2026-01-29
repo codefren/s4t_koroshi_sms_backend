@@ -21,7 +21,8 @@ from src.adapters.secondary.database.orm import (
     OrderHistory,
     ProductReference,
     Almacen,
-    Customer
+    Customer,
+    OrderLineBoxDistribution
 )
 
 

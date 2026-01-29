@@ -8,7 +8,21 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.exc import OperationalError
 
-from src.adapters.secondary.database.orm import Base
+from src.adapters.secondary.database.orm import (
+    Base,
+    Order,
+    OrderLine,
+    OrderStatus,
+    OrderHistory,
+    ProductReference,
+    Almacen,
+    Customer,
+    PackingBox,
+    OrderLineBoxDistribution,
+    PickingTask,
+    ProductLocation,
+    Operator
+)
 
 
 # Engine SQLite en memoria
@@ -56,6 +70,18 @@ def create_test_database():
         # Ignorar errores de índices duplicados en SQLite
         if "already exists" not in str(e):
             raise
+    
+    # Forzar creación de OrderLineBoxDistribution si no existe
+    # (fix para modelos agregados después de la sesión inicial)
+    from sqlalchemy import inspect
+    inspector = inspect(test_engine)
+    existing_tables = inspector.get_table_names()
+    
+    if "order_line_box_distribution" not in existing_tables:
+        try:
+            OrderLineBoxDistribution.__table__.create(test_engine, checkfirst=True)
+        except:
+            pass  # Si ya existe, ignorar
 
 
 def drop_test_database():

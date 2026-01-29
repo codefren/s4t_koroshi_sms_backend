@@ -474,9 +474,9 @@ class TestPackingBoxIntegration:
         assert box1 is not None, "Caja BOX-001 debe existir"
         assert box2 is not None, "Caja BOX-002 debe existir"
         
-        # Verificar total_items de cada caja
-        assert box1.total_items == 2, f"BOX-001 debe tener 2 items, tiene {box1.total_items}"
-        assert box2.total_items == 1, f"BOX-002 debe tener 1 item, tiene {box2.total_items}"
+        # Verificar total_items de cada caja (suma de quantity_served)
+        assert box1.total_items == 25, f"BOX-001 debe tener 25 items (10+15), tiene {box1.total_items}"
+        assert box2.total_items == 5, f"BOX-002 debe tener 5 items, tiene {box2.total_items}"
         
         # Verificar que las líneas están asignadas correctamente
         test_db.refresh(line1)
@@ -526,8 +526,8 @@ class TestPackingBoxIntegration:
         
         assert box is not None, "Caja BOX-A debe existir"
         
-        # Debe ser 1 item (mismo SKU), no 3
-        assert box.total_items == 1, f"BOX-A debe tener 1 item (mismo SKU), tiene {box.total_items}"
+        # Debe ser 10 items (suma de cantidades 5+3+2), no contar líneas
+        assert box.total_items == 10, f"BOX-A debe tener 10 items (5+3+2), tiene {box.total_items}"
         
         # Verificar que la línea tiene la cantidad acumulada
         order_line = test_db.query(OrderLine).filter(
@@ -567,7 +567,7 @@ class TestPackingBoxIntegration:
         box = test_db.query(PackingBox).filter(PackingBox.codigo_caja == "BOX-MAIN").first()
         
         assert box is not None, "Caja BOX-MAIN debe existir"
-        assert box.total_items == 5, f"BOX-MAIN debe tener 5 items, tiene {box.total_items}"
+        assert box.total_items == 38, f"BOX-MAIN debe tener 38 items (suma de cantidades), tiene {box.total_items}"
         
         # Verificar que todas las líneas están asignadas a la misma caja
         lines_in_box = test_db.query(OrderLine).filter(

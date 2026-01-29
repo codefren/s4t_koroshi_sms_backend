@@ -8,7 +8,7 @@ from typing import List, Optional
 from datetime import datetime, timezone
 
 from src.adapters.secondary.database.orm import (
-    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus
+    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
@@ -471,18 +471,24 @@ def batch_update_order(
     lines_partial = 0
     lines_pending = 0
     
-    # 4. Group line updates by SKU and accumulate quantities
-    # This allows multiple updates of the same SKU to be cumulative
-    sku_quantities = {}
-    sku_box_codes = {}
+    # 4. Group by SKU to accumulate total quantities, but keep box distributions separate
+    sku_quantities = {}  # {sku: total_quantity}
+    sku_box_distributions = {}  # {sku: [{box_code: str, quantity: int}, ...]}
+    
     for line_update in lines_updates:
+        # Accumulate total quantity per SKU
         if line_update.sku not in sku_quantities:
             sku_quantities[line_update.sku] = 0
-            sku_box_codes[line_update.sku] = line_update.box_code
+            sku_box_distributions[line_update.sku] = []
+        
         sku_quantities[line_update.sku] += line_update.quantity_served
-        # Use last box_code if multiple provided for same SKU
+        
+        # Keep track of each box distribution for this SKU
         if line_update.box_code:
-            sku_box_codes[line_update.sku] = line_update.box_code
+            sku_box_distributions[line_update.sku].append({
+                'box_code': line_update.box_code,
+                'quantity': line_update.quantity_served
+            })
     
     # 5. Process each unique SKU with accumulated quantity
     for sku, accumulated_quantity in sku_quantities.items():
@@ -552,44 +558,68 @@ def batch_update_order(
                 order_line.estado = 'PENDING'
                 lines_pending += 1
         
-        # Handle packing box if box_code provided
-        box_code = sku_box_codes.get(sku)
-        if box_code:
-            # Find or create packing box
-            packing_box = db.query(PackingBox).filter(
-                PackingBox.codigo_caja == box_code
-            ).first()
-            
-            if not packing_box:
-                # Create new packing box as CLOSED (products already served)
-                max_numero = db.query(PackingBox).filter(
-                    PackingBox.order_id == order.id
-                ).count()
+        # 6. Handle distribution across multiple boxes
+        box_distributions = sku_box_distributions.get(sku, [])
+        if box_distributions:
+            first_box_id = None
+            for dist in box_distributions:
+                # Find or create packing box
+                packing_box = db.query(PackingBox).filter(
+                    PackingBox.codigo_caja == dist['box_code']
+                ).first()
                 
-                packing_box = PackingBox(
-                    order_id=order.id,
-                    numero_caja=max_numero + 1,
-                    codigo_caja=box_code,
-                    estado='CLOSED',
-                    total_items=0
-                )
-                db.add(packing_box)
-                db.flush()
-            
-            # Assign order_line to packing_box
-            if order_line.packing_box_id != packing_box.id:
-                # If was in another box, decrement that box's count
-                if order_line.packing_box_id:
-                    old_box = db.query(PackingBox).filter(
-                        PackingBox.id == order_line.packing_box_id
-                    ).first()
-                    if old_box:
-                        old_box.total_items = max(0, old_box.total_items - 1)
+                if not packing_box:
+                    # Create new packing box as CLOSED (products already served)
+                    max_numero = db.query(PackingBox).filter(
+                        PackingBox.order_id == order.id
+                    ).count()
+                    
+                    packing_box = PackingBox(
+                        order_id=order.id,
+                        numero_caja=max_numero + 1,
+                        codigo_caja=dist['box_code'],
+                        estado='CLOSED',
+                        total_items=0
+                    )
+                    db.add(packing_box)
+                    db.flush()
                 
-                # Assign to new box
-                order_line.packing_box_id = packing_box.id
+                # Track first box for legacy compatibility
+                if first_box_id is None:
+                    first_box_id = packing_box.id
+                
+                # Create or update distribution record
+                existing_dist = db.query(OrderLineBoxDistribution).filter(
+                    OrderLineBoxDistribution.order_line_id == order_line.id,
+                    OrderLineBoxDistribution.packing_box_id == packing_box.id
+                ).first()
+                
+                if existing_dist:
+                    # Update existing distribution
+                    old_quantity = existing_dist.quantity_in_box
+                    existing_dist.quantity_in_box = dist['quantity']
+                    existing_dist.fecha_empacado = datetime.now(timezone.utc)
+                    
+                    # Adjust box total_items (remove old, add new)
+                    packing_box.total_items = packing_box.total_items - old_quantity + dist['quantity']
+                else:
+                    # Create new distribution record
+                    distribution = OrderLineBoxDistribution(
+                        order_line_id=order_line.id,
+                        packing_box_id=packing_box.id,
+                        quantity_in_box=dist['quantity'],
+                        fecha_empacado=datetime.now(timezone.utc)
+                    )
+                    db.add(distribution)
+                    
+                    # Update box total_items with specific quantity
+                    packing_box.total_items += dist['quantity']
+            
+            # Update legacy fields for backward compatibility
+            # If distributed across multiple boxes, assign to first box
+            if first_box_id:
+                order_line.packing_box_id = first_box_id
                 order_line.fecha_empacado = datetime.now(timezone.utc)
-                packing_box.total_items += 1
     
     # Flush changes to DB before counting
     db.flush()
