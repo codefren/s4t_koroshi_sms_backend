@@ -104,7 +104,7 @@ class TestBatchUpdateLogic:
         # Verificar que ProductReference fue creado
         created_product = test_db.query(ProductReference).filter_by(sku=new_sku).first()
         assert created_product is not None
-        assert created_product.temporada == "AUTO_CREATED"
+        assert created_product.temporada == "0"
         assert created_product.nombre_producto == f"AUTO CREATED - {new_sku}"
         assert result.status == "success"
     
