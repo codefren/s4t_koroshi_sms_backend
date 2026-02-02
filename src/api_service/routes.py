@@ -16,14 +16,17 @@ from src.api_service.schemas import (
     UpdateOrderResponse,
     CustomerResponse,
     BatchUpdateOrderRequest,
-    BatchUpdateOrderResponse
+    BatchUpdateOrderResponse,
+    RegisterStockRequest,
+    RegisterStockResponse
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
     get_customer_b2c_orders,
     get_order_lines_for_customer,
     update_order_quantity,
-    batch_update_order
+    batch_update_order,
+    register_stock
 )
 
 
@@ -275,6 +278,53 @@ async def update_order(
         customer=customer,
         db=db
     )
+
+
+@router.post(
+    "/stock/register",
+    response_model=RegisterStockResponse,
+    tags=["Stock"]
+)
+async def register_stock_movements(
+    request: RegisterStockRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Register stock movements between locations.
+    
+    **Process:**
+    1. Receives list of stock items with SKU and quantity
+    2. Accumulates quantities for duplicate SKUs
+    3. Auto-creates products in catalog if SKU doesn't exist
+    4. Creates stock movement records with status PENDING
+    
+    **Features:**
+    - Duplicate SKU handling: quantities are accumulated
+    - Auto-creation: missing products are created with name AUTO-{SKU}
+    - Status tracking: all records start as PENDING
+    
+    **Request example:**
+    ```json
+    {
+        "origin": "WAREHOUSE1",
+        "destinity": "STORE1",
+        "stock_line": [
+            {"sku": "ABC123", "quantity": 10},
+            {"sku": "DEF456", "quantity": 25},
+            {"sku": "ABC123", "quantity": 5}
+        ]
+    }
+    ```
+    
+    **Response includes:**
+    - Total lines received
+    - Unique SKUs processed
+    - Products auto-created
+    - Records created in database
+    
+    **Note:** No authentication required for this endpoint.
+    """
+    return register_stock(request=request, db=db)
 
 
 @router.get("/health", tags=["Health"])

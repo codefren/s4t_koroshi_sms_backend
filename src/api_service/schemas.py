@@ -143,3 +143,53 @@ class BatchUpdateOrderResponse(BaseModel):
 class ErrorResponse(BaseModel):
     detail: str
     error_code: Optional[str] = None
+
+
+# ============================================================================
+# STOCK MOVEMENT SCHEMAS
+# ============================================================================
+
+class StockLineItem(BaseModel):
+    """Single stock item in a stock movement request"""
+    sku: str = Field(..., max_length=100, description="Product SKU")
+    quantity: int = Field(..., gt=0, description="Quantity to move (must be positive)")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "sku": "ABC123",
+                "quantity": 50
+            }
+        }
+    )
+
+
+class RegisterStockRequest(BaseModel):
+    """Request to register stock movements between locations"""
+    origin: str = Field(..., max_length=10, description="Origin location (max 10 chars)")
+    destinity: str = Field(..., max_length=10, description="Destination location (max 10 chars)")
+    stock_line: List[StockLineItem] = Field(..., min_length=1, description="List of stock items to move")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "origin": "WAREHOUSE1",
+                "destinity": "STORE1",
+                "stock_line": [
+                    {"sku": "ABC123", "quantity": 10},
+                    {"sku": "DEF456", "quantity": 25},
+                    {"sku": "ABC123", "quantity": 5}
+                ]
+            }
+        }
+    )
+
+
+class RegisterStockResponse(BaseModel):
+    """Response after registering stock movements"""
+    status: str = Field(..., description="Success or error status")
+    message: str = Field(..., description="Descriptive message")
+    total_lines_received: int = Field(..., description="Total number of lines in request")
+    unique_skus_processed: int = Field(..., description="Number of unique SKUs processed")
+    products_auto_created: int = Field(..., description="Number of products auto-created")
+    records_created: int = Field(..., description="Number of stock records created")

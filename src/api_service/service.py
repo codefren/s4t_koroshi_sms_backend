@@ -8,12 +8,12 @@ from typing import List, Optional
 from datetime import datetime, timezone
 
 from src.adapters.secondary.database.orm import (
-    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution
+    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
     OrderListItem, OrderLineSimple, OrderLinesResponse, UpdateOrderResponse,
-    OrdersListResponse, OrderLineUpdate, BatchUpdateOrderResponse
+    OrdersListResponse, OrderLineUpdate, BatchUpdateOrderResponse, RegisterStockRequest, RegisterStockResponse
 )
 
 
@@ -660,4 +660,85 @@ def batch_update_order(
         lines_completed=lines_completed,
         lines_partial=lines_partial,
         lines_pending=lines_pending
+    )
+
+
+def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockResponse:
+    """
+    Register stock movements between locations.
+    
+    Process:
+    1. Accumulate quantities for duplicate SKUs in the request
+    2. For each unique SKU:
+       - Search in ProductReference by SKU
+       - If not found, auto-create with name AUTO-{SKU}
+       - Create APIStockHistorico record with FK to product
+    3. Return summary of operations
+    
+    Args:
+        request: RegisterStockRequest with origin, destinity, and stock_line
+        db: Database session
+        
+    Returns:
+        RegisterStockResponse with operation summary
+        
+    Raises:
+        HTTPException: If validation fails
+    """
+    # Step 1: Accumulate quantities by SKU (handle duplicates)
+    sku_quantities = {}
+    total_lines_received = len(request.stock_line)
+    
+    for item in request.stock_line:
+        if item.sku not in sku_quantities:
+            sku_quantities[item.sku] = 0
+        sku_quantities[item.sku] += item.quantity
+    
+    # Step 2: Process each unique SKU
+    products_auto_created = 0
+    records_created = 0
+    
+    for sku, accumulated_quantity in sku_quantities.items():
+        # 2.1 Search for product by SKU
+        product = db.query(ProductReference).filter(ProductReference.sku == sku).first()
+        
+        # 2.2 Auto-create product if it doesn't exist
+        if not product:
+            product = ProductReference(
+                sku=sku,
+                referencia=f"AUTO-{sku[:20]}",  # Truncate to avoid overflow
+                nombre_producto=f"AUTO-{sku}",
+                color_id="AUTO",
+                nombre_color="Auto Created",
+                talla="N/A",
+                posicion_talla=0,  # NOT NULL constraint
+                temporada="AUTO_CREATED",
+                activo=True
+            )
+            db.add(product)
+            db.flush()  # Get product.id for FK
+            products_auto_created += 1
+        
+        # 2.3 Create stock movement record with FK to product
+        stock_record = APIStockHistorico(
+            product_reference_id=product.id,  # FK NOT NULL
+            quantity=accumulated_quantity,
+            origin=request.origin,
+            destinity=request.destinity,
+            status='PENDING'  # Default status
+        )
+        db.add(stock_record)
+        records_created += 1
+    
+    # Step 3: Commit all changes
+    db.commit()
+    
+    # Step 4: Return summary
+    return RegisterStockResponse(
+        status="success",
+        message=f"Successfully registered {records_created} stock movements from {request.origin} to {request.destinity}",
+        total_lines_received=total_lines_received,
+        unique_skus_processed=len(sku_quantities),
+        products_auto_created=products_auto_created,
+        records_created=records_created
     )

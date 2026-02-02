@@ -1073,3 +1073,64 @@ class ProductLocation(Base):
     
 #     def __repr__(self):
 #         return f"<StockMovement {self.tipo_movimiento} {self.cantidad} units of product_id={self.product_id} at almacen_id={self.almacen_id}>"
+
+
+class APIStockHistorico(Base):
+    """
+    Historial de movimientos de stock entre ubicaciones/almacenes.
+    
+    Registra transferencias de stock con referencia obligatoria al catálogo de productos.
+    El SKU no se almacena directamente, sino que se accede a través de la relación con ProductReference.
+    
+    Status values:
+    - PENDING: En espera de sincronización con el sistema externo
+    - SYNCHRONIZED: Ya sincronizado correctamente
+    
+    Los registros se crean en status PENDING y luego se actualizan a SYNCHRONIZED
+    cuando el sistema externo confirma la recepción.
+    """
+    __tablename__ = "api_stock_historico"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # FK OBLIGATORIA - el producto DEBE existir antes de registrar stock
+    # Si el SKU no existe, se auto-crea primero en ProductReference
+    product_reference_id = Column(
+        Integer, 
+        ForeignKey("product_references.id", ondelete="NO ACTION"), 
+        nullable=False,
+        index=True
+    )
+    
+    # Cantidad del movimiento de stock (puede ser positivo o negativo)
+    quantity = Column(Integer, nullable=False)
+    
+    # Ubicación de origen (máximo 10 caracteres)
+    origin = Column(String(10), nullable=False, index=True)
+    
+    # Ubicación de destino (máximo 10 caracteres)
+    destinity = Column(String(10), nullable=False, index=True)
+    
+    # Estado del registro: PENDING o SYNCHRONIZED
+    status = Column(String(20), default='PENDING', nullable=False, index=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    
+    # Relationship para acceder al producto y su SKU
+    product_reference = relationship("ProductReference", backref="stock_movements")
+    
+    __table_args__ = (
+        # Índice compuesto para consultas de movimientos entre ubicaciones
+        Index('idx_product_origin_destinity', 'product_reference_id', 'origin', 'destinity'),
+        # Índice para consultas por status y fecha de creación
+        Index('idx_status_created', 'status', 'created_at'),
+        # Índice para reportes por ubicación de origen
+        Index('idx_origin_created', 'origin', 'created_at'),
+        # Índice para reportes por ubicación de destino
+        Index('idx_destinity_created', 'destinity', 'created_at'),
+    )
+    
+    def __repr__(self):
+        return f"<APIStockHistorico product_id={self.product_reference_id} qty={self.quantity} {self.origin}→{self.destinity} status={self.status}>"

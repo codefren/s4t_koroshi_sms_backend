@@ -21,7 +21,8 @@ from src.adapters.secondary.database.orm import (
     OrderLineBoxDistribution,
     PickingTask,
     ProductLocation,
-    Operator
+    Operator,
+    APIStockHistorico
 )
 
 
