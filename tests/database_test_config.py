@@ -22,7 +22,8 @@ from src.adapters.secondary.database.orm import (
     PickingTask,
     ProductLocation,
     Operator,
-    APIStockHistorico
+    APIStockHistorico,
+    APIMatricula
 )
 
 

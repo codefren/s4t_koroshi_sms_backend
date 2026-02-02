@@ -193,3 +193,32 @@ class RegisterStockResponse(BaseModel):
     unique_skus_processed: int = Field(..., description="Number of unique SKUs processed")
     products_auto_created: int = Field(..., description="Number of products auto-created")
     records_created: int = Field(..., description="Number of stock records created")
+
+
+# ============================================================================
+# BOX NUMBER REGISTRATION SCHEMAS
+# ============================================================================
+
+class RegisterBoxNumberRequest(BaseModel):
+    """Request to register a box number for external validation"""
+    box_number: str = Field(
+        ..., 
+        max_length=20, 
+        min_length=1,
+        description="Box number (unique, max 20 chars)"
+    )
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "box_number": "BOX-12345"
+            }
+        }
+    )
+
+
+class RegisterBoxNumberResponse(BaseModel):
+    """Response after registering a box number"""
+    status: str = Field(..., description="Success or error")
+    message: str = Field(..., description="Descriptive message")
+    box_number: str = Field(..., description="Box number registered")

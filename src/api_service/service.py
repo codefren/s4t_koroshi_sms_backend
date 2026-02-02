@@ -8,12 +8,13 @@ from typing import List, Optional
 from datetime import datetime, timezone
 
 from src.adapters.secondary.database.orm import (
-    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico
+    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
     OrderListItem, OrderLineSimple, OrderLinesResponse, UpdateOrderResponse,
-    OrdersListResponse, OrderLineUpdate, BatchUpdateOrderResponse, RegisterStockRequest, RegisterStockResponse
+    OrdersListResponse, OrderLineUpdate, BatchUpdateOrderResponse, RegisterStockRequest, RegisterStockResponse,
+    RegisterBoxNumberRequest, RegisterBoxNumberResponse
 )
 
 
@@ -741,4 +742,55 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
         unique_skus_processed=len(sku_quantities),
         products_auto_created=products_auto_created,
         records_created=records_created
+    )
+
+
+def register_box_number(request: RegisterBoxNumberRequest, db: Session) -> RegisterBoxNumberResponse:
+    """
+    Register a box number for external validation.
+    
+    Box numbers must be unique. If the box_number already exists, 
+    an HTTP 409 Conflict error is raised.
+    
+    Process:
+    1. Check if box_number already exists
+    2. If exists: raise HTTPException 409 Conflict
+    3. If new: create record with status PENDING
+    
+    Args:
+        request: RegisterBoxNumberRequest with box_number
+        db: Database session
+        
+    Returns:
+        RegisterBoxNumberResponse with operation result
+        
+    Raises:
+        HTTPException 409: If box_number already exists (duplicate)
+    """
+    # Step 1: Check if box_number already exists
+    existing_record = db.query(APIMatricula).filter(
+        APIMatricula.box_number == request.box_number
+    ).first()
+    
+    # Step 2: If exists, raise conflict error
+    if existing_record:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Box number '{request.box_number}' has already been verified and registered"
+        )
+    
+    # Step 3: Create new record with status PENDING
+    new_record = APIMatricula(
+        box_number=request.box_number,
+        status='PENDING'
+    )
+    db.add(new_record)
+    db.commit()
+    db.refresh(new_record)
+    
+    # Step 4: Return success response
+    return RegisterBoxNumberResponse(
+        status="success",
+        message=f"Box number '{request.box_number}' registered successfully",
+        box_number=new_record.box_number
     )

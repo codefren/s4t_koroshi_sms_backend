@@ -1089,7 +1089,7 @@ class APIStockHistorico(Base):
     Los registros se crean en status PENDING y luego se actualizan a SYNCHRONIZED
     cuando el sistema externo confirma la recepción.
     """
-    __tablename__ = "api_stock_historico"
+    __tablename__ = "api_stock_history"
 
     id = Column(Integer, primary_key=True, index=True)
     
@@ -1123,14 +1123,54 @@ class APIStockHistorico(Base):
     
     __table_args__ = (
         # Índice compuesto para consultas de movimientos entre ubicaciones
-        Index('idx_product_origin_destinity', 'product_reference_id', 'origin', 'destinity'),
+        Index('idx_stock_product_origin_dest', 'product_reference_id', 'origin', 'destinity'),
         # Índice para consultas por status y fecha de creación
-        Index('idx_status_created', 'status', 'created_at'),
+        Index('idx_stock_status_created', 'status', 'created_at'),
         # Índice para reportes por ubicación de origen
-        Index('idx_origin_created', 'origin', 'created_at'),
+        Index('idx_stock_origin_created', 'origin', 'created_at'),
         # Índice para reportes por ubicación de destino
-        Index('idx_destinity_created', 'destinity', 'created_at'),
+        Index('idx_stock_dest_created', 'destinity', 'created_at'),
     )
     
     def __repr__(self):
         return f"<APIStockHistorico product_id={self.product_reference_id} qty={self.quantity} {self.origin}→{self.destinity} status={self.status}>"
+
+
+class APIMatricula(Base):
+    """
+    Registro de números de caja (box numbers) para validación externa.
+    
+    Almacena números de caja únicos que serán sincronizados con sistemas externos.
+    El status indica el estado de sincronización.
+    
+    Status values:
+    - PENDING: En espera de sincronización
+    - SYNCHRONIZED: Sincronizado correctamente con sistema externo
+    - ERROR: Error durante sincronización (ver error_detail)
+    
+    El campo box_number tiene constraint UNIQUE - no se permiten duplicados.
+    """
+    __tablename__ = "api_box_number"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Box number único (constraint UNIQUE)
+    box_number = Column(String(20), nullable=False, unique=True, index=True)
+    
+    # Estado de sincronización: PENDING, SYNCHRONIZED, ERROR
+    status = Column(String(20), default='PENDING', nullable=False, index=True)
+    
+    # Detalle del error (solo si status=ERROR)
+    error_detail = Column(String(255), nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    
+    __table_args__ = (
+        # Índice para consultas por status y fecha
+        Index('idx_status_created_box_number', 'status', 'created_at'),
+    )
+    
+    def __repr__(self):
+        return f"<APIMatricula box_number={self.box_number} status={self.status}>"

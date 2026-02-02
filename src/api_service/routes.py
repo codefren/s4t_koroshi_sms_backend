@@ -18,7 +18,9 @@ from src.api_service.schemas import (
     BatchUpdateOrderRequest,
     BatchUpdateOrderResponse,
     RegisterStockRequest,
-    RegisterStockResponse
+    RegisterStockResponse,
+    RegisterBoxNumberRequest,
+    RegisterBoxNumberResponse
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
@@ -26,7 +28,8 @@ from src.api_service.service import (
     get_order_lines_for_customer,
     update_order_quantity,
     batch_update_order,
-    register_stock
+    register_stock,
+    register_box_number
 )
 
 
@@ -287,6 +290,7 @@ async def update_order(
 )
 async def register_stock_movements(
     request: RegisterStockRequest,
+    customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
 ):
     """
@@ -322,9 +326,71 @@ async def register_stock_movements(
     - Products auto-created
     - Records created in database
     
-    **Note:** No authentication required for this endpoint.
+    **Authentication:** Required - Customer API Key in X-API-Key header.
     """
     return register_stock(request=request, db=db)
+
+
+@router.post(
+    "/box-number/register",
+    response_model=RegisterBoxNumberResponse,
+    tags=["Box Number"],
+    responses={
+        409: {
+            "description": "Box number already verified and registered",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Box number 'BOX-12345' has already been verified and registered"}
+                }
+            }
+        }
+    }
+)
+async def register_box_number_endpoint(
+    request: RegisterBoxNumberRequest,
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    Register a box number for external validation.
+    
+    **Process:**
+    1. Receives a box number (unique identifier)
+    2. Checks if already registered
+    3. Creates new record with status PENDING if new
+    4. Returns HTTP 409 Conflict if duplicate
+    
+    **Features:**
+    - Strict uniqueness: duplicate registrations return 409 Conflict error
+    - Status tracking: PENDING → SYNCHRONIZED → ERROR
+    - Unique constraint: box_number must be unique in database
+    
+    **Request example:**
+    ```json
+    {
+        "box_number": "BOX-12345"
+    }
+    ```
+    
+    **Success Response (201):**
+    ```json
+    {
+        "status": "success",
+        "message": "Box number 'BOX-12345' registered successfully",
+        "box_number": "BOX-12345"
+    }
+    ```
+    
+    **Error Response (409):**
+    ```json
+    {
+        "detail": "Box number 'BOX-12345' has already been verified and registered"
+    }
+    ```
+    
+    **Authentication:** Required - Customer API Key in X-API-Key header.
+    """
+    return register_box_number(request=request, db=db)
 
 
 @router.get("/health", tags=["Health"])

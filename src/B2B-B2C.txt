@@ -4,16 +4,7 @@
 - cantidades servidas
 - 
 
-
-
-almacenes 
-vista 
-estado de si se ha descargado o no 
----------------------------------------------------------
-B to C
-
-api que publique las ordenes de servicio
-lista de ordenes de servicio
+ahora quiero que  crees un customer que maneje los almacenes 00006665 y 
 -----------------------------------------------------------------
 
 lista de ordenes b2b
@@ -28,7 +19,7 @@ crear dos endpoints para B2B
 - status = leido o no leido
 --------------------------------------------------
 
-GET
+GET lisa de order line solo con sku y quantity, la lista solo muestra estos datos y se consulta envianndo por url la pk de la order
 {
     sku
     quantity
@@ -57,14 +48,14 @@ el mismo proceso que B2B pero sin matricula
 
 ----------------------------------------------------------
 
-Actualizar Stock en un almacen lista de inventario
-PUT
-{
-    sku
-    cantidad
-    updated_at
-    created_at
-}
+#Actualizar Stock en un almacen lista de inventario
+#PUT
+#{
+#    sku
+#    cantidad
+#    updated_at
+#    created_at
+#}
 
 -----------------------------------------------------------
 
@@ -102,3 +93,22 @@ Deuda tecnina
 
 cambiar todos los campos de la db a ingles
 cambiar 
+
+
+
+
+
+---------------------------------------------
+al hacer update se deben hacer todas las llmadas por orden
+
+
+al actualizar la orden de servicio el status debe cambiar a READY y debe desaparecer tanto de en endpoint de las lineas de orden, como de la lista de ordenes
+
+debe haber una tabla de stock para stock reservado 
+
+
+seria restar las prendas de las ordenes, menos el stock
+
+stock operable = stock - stock reservado
+stock no operable = stock reservado
+
