@@ -311,7 +311,7 @@ def list_order_lines(
         if line.product_reference:
             producto = {
                 "nombre": line.product_reference.nombre_producto,
-                "color": line.product_reference.color,
+                "color": line.product_reference.nombre_color,
                 "talla": line.product_reference.talla,
                 "sku": line.product_reference.sku
             }

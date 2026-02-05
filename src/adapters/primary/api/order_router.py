@@ -170,7 +170,7 @@ def get_order_detail(
         producto = OrderProductDetail(
             id=line.id,
             nombre=product.nombre_producto if product else "Producto no vinculado",
-            descripcion=product.color if product else "",  # Nombre del color
+            descripcion=product.nombre_color if product else "",  # Nombre del color
             color=product.color_id if product else "",  # Código del color
             talla=product.talla if product else "",
             ubicacion=location.codigo_ubicacion if location else "Sin ubicación",
@@ -189,6 +189,7 @@ def get_order_detail(
     
     # Contar cajas de la orden
     num_cajas = len(order.packing_boxes) if order.packing_boxes else 0
+    # total cajas
     total_cajas_str = f"{num_cajas} caja{'s' if num_cajas != 1 else ''}" if num_cajas > 0 else "Sin cajas"
     
     # Construir respuesta
