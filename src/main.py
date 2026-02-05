@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import sentry_sdk
 from guard.middleware import SecurityMiddleware
 from src.adapters.secondary.database.config import engine, Base
@@ -31,8 +32,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FastAPI Hexagonal ODBC", lifespan=lifespan)
 
+# CORS Middleware (debe ir ANTES del SecurityMiddleware para manejar OPTIONS preflight)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:8080",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8004",
+        "http://192.168.1.14:8000",
+        "http://192.168.1.14:19000",  # Expo Metro bundler
+        "http://192.168.1.14:19006",  # Expo web
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["*"],
+    max_age=600,
+)
+
 # Security middleware with comprehensive protection
-# Features: rate limiting, IP banning, penetration detection, security headers, CORS
+# Features: rate limiting, IP banning, penetration detection, security headers
 app.add_middleware(SecurityMiddleware, config=get_security_config())
 
 # app.include_router(item_router, prefix="/api/v1")  # LEGACY - Removed InventoryItemModel

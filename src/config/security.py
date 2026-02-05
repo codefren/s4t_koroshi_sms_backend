@@ -44,12 +44,15 @@ def get_security_config() -> SecurityConfig:
         enable_cors=True,
         cors_allow_origins=[
             "http://localhost:3000",
-            "http://localhost:5173",
+            "http://localhost:5173",  # Vite dev server
             "http://localhost:8080",
             "http://127.0.0.1:8004",
-            
+            "http://127.0.0.1:5173",  # Alternative localhost format
+            "http://192.168.1.14:8000",  # React Native app
+            "http://192.168.1.14:19000",  # Expo Metro bundler
+            "http://192.168.1.14:19006",  # Expo web
         ],
-        cors_allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        cors_allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         cors_allow_headers=["*"],
         cors_allow_credentials=True,
         cors_max_age=600,
