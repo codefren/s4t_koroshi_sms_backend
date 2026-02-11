@@ -6,6 +6,8 @@ from sqlalchemy import func
 from fastapi import HTTPException
 from typing import List, Optional
 from datetime import datetime, timezone
+import requests
+import json
 
 from src.adapters.secondary.database.orm import (
     Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula
@@ -669,12 +671,14 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
     Register stock movements between locations.
     
     Process:
-    1. Accumulate quantities for duplicate SKUs in the request
-    2. For each unique SKU:
-       - Search in ProductReference by SKU
-       - If not found, auto-create with name AUTO-{SKU}
-       - Create APIStockHistorico record with FK to product
-    3. Return summary of operations
+    1. Transform request to Spanish format for external API
+    2. Send POST to external API (localhost:5053/api/Traspasos/simple)
+    3. If external API returns 201:
+       - Accumulate quantities for duplicate SKUs
+       - Auto-create products if not found
+       - Save to local database
+    4. If external API returns 400 or error:
+       - Rollback and return error 400
     
     Args:
         request: RegisterStockRequest with origin, destinity, and stock_line
@@ -684,65 +688,140 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
         RegisterStockResponse with operation summary
         
     Raises:
-        HTTPException: If validation fails
+        HTTPException 400: If external API fails or validation fails
     """
-    # Step 1: Accumulate quantities by SKU (handle duplicates)
-    sku_quantities = {}
-    total_lines_received = len(request.stock_line)
-    
-    for item in request.stock_line:
-        if item.sku not in sku_quantities:
-            sku_quantities[item.sku] = 0
-        sku_quantities[item.sku] += item.quantity
-    
-    # Step 2: Process each unique SKU
-    products_auto_created = 0
-    records_created = 0
-    
-    for sku, accumulated_quantity in sku_quantities.items():
-        # 2.1 Search for product by SKU
-        product = db.query(ProductReference).filter(ProductReference.sku == sku).first()
+    try:
+        # Step 1: Transform to Spanish format for external API
+        lineas_espanol = [
+            {
+                "ean": "",  # No tenemos EAN en el request original
+                "sku": item.sku,
+                "cantidad": item.quantity
+            }
+            for item in request.stock_line
+        ]
         
-        # 2.2 Auto-create product if it doesn't exist
-        if not product:
-            product = ProductReference(
-                sku=sku,
-                referencia=f"AUTO-{sku[:20]}",  # Truncate to avoid overflow
-                nombre_producto=f"AUTO-{sku}",
-                color_id="AUTO",
-                nombre_color="Auto Created",
-                talla="N/A",
-                posicion_talla=0,  # NOT NULL constraint
-                temporada="AUTO_CREATED",
-                activo=True
-            )
-            db.add(product)
-            db.flush()  # Get product.id for FK
-            products_auto_created += 1
+        external_payload = {
+            "empresaId": "0001",  # Hardcoded as requested
+            "origen": request.origin,
+            "destino": request.destinity,
+            "lineas": lineas_espanol
+        }
         
-        # 2.3 Create stock movement record with FK to product
-        stock_record = APIStockHistorico(
-            product_reference_id=product.id,  # FK NOT NULL
-            quantity=accumulated_quantity,
-            origin=request.origin,
-            destinity=request.destinity,
-            status='PENDING'  # Default status
+        # Step 2: Print request to external API
+        print("\n" + "="*80)
+        print("ENVIANDO REQUEST AL API EXTERNO")
+        print("="*80)
+        print(f"URL: http://localhost:5053/api/Traspasos/simple")
+        print(f"Payload:")
+        print(json.dumps(external_payload, indent=2, ensure_ascii=False))
+        print("="*80 + "\n")
+        
+        # Step 3: Send POST to external API
+        external_api_url = "http://localhost:5053/api/Traspasos/simple"
+        response = requests.post(
+            external_api_url,
+            json=external_payload,
+            headers={"Content-Type": "application/json"},
+            timeout=10
         )
-        db.add(stock_record)
-        records_created += 1
-    
-    # Step 3: Commit all changes
-    db.commit()
-    
-    # Step 4: Return summary
-    return RegisterStockResponse(
-        status="success",
-        message=f"Successfully registered {records_created} stock movements from {request.origin} to {request.destinity}",
-        total_lines_received=total_lines_received,
-        unique_skus_processed=len(sku_quantities),
-        products_auto_created=products_auto_created,
-        records_created=records_created
-    )
+        
+        # Step 4: Print response from external API
+        print("\n" + "="*80)
+        print("RESPONSE DEL API EXTERNO")
+        print("="*80)
+        print(f"Status Code: {response.status_code}")
+        print(f"Response Body: {response.text}")
+        print("="*80 + "\n")
+        
+        # Step 5: Check response status
+        if response.status_code != 201:
+            # External API failed - rollback and return error
+            db.rollback()
+            error_detail = f"External API returned {response.status_code}: {response.text}"
+            print(f"ERROR: {error_detail}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error al registrar en sistema externo: {error_detail}"
+            )
+        
+        # Step 6: External API returned 201 - proceed with local DB storage
+        print("External API returned 201 - Proceeding with local DB storage...\n")
+        
+        # Step 7: Accumulate quantities by SKU (handle duplicates)
+        sku_quantities = {}
+        total_lines_received = len(request.stock_line)
+        
+        for item in request.stock_line:
+            if item.sku not in sku_quantities:
+                sku_quantities[item.sku] = 0
+            sku_quantities[item.sku] += item.quantity
+        
+        # Step 8: Process each unique SKU
+        products_auto_created = 0
+        records_created = 0
+        
+        for sku, accumulated_quantity in sku_quantities.items():
+            # 8.1 Search for product by SKU
+            product = db.query(ProductReference).filter(ProductReference.sku == sku).first()
+            
+            # 8.2 Auto-create product if it doesn't exist
+            if not product:
+                product = ProductReference(
+                    sku=sku,
+                    referencia=f"AUTO-{sku[:20]}",  # Truncate to avoid overflow
+                    nombre_producto=f"AUTO-{sku}",
+                    color_id="AUTO",
+                    nombre_color="Auto Created",
+                    talla="N/A",
+                    posicion_talla=0,  # NOT NULL constraint
+                    temporada="AUTO_CREATED",
+                    activo=True
+                )
+                db.add(product)
+                db.flush()  # Get product.id for FK
+                products_auto_created += 1
+            
+            # 8.3 Create stock movement record with FK to product
+            stock_record = APIStockHistorico(
+                product_reference_id=product.id,  # FK NOT NULL
+                quantity=accumulated_quantity,
+                origin=request.origin,
+                destinity=request.destinity,
+                status='PENDING'  # Default status
+            )
+            db.add(stock_record)
+            records_created += 1
+        
+        # Step 9: Commit all changes to local DB
+        db.commit()
+        print(f"Successfully saved {records_created} records to local DB\n")
+        
+        # Step 10: Return summary
+        return RegisterStockResponse(
+            status="success",
+            message=f"Successfully registered {records_created} stock movements from {request.origin} to {request.destinity}",
+            total_lines_received=total_lines_received,
+            unique_skus_processed=len(sku_quantities),
+            products_auto_created=products_auto_created,
+            records_created=records_created
+        )
+        
+    except requests.exceptions.RequestException as e:
+        # Network error or timeout
+        db.rollback()
+        error_msg = f"Error conectando con API externo: {str(e)}"
+        print(f"ERROR: {error_msg}")
+        raise HTTPException(status_code=400, detail=error_msg)
+    except HTTPException:
+        # Re-raise HTTPException without modification
+        raise
+    except Exception as e:
+        # Any other error
+        db.rollback()
+        error_msg = f"Error al registrar stock: {str(e)}"
+        print(f"ERROR: {error_msg}")
+        raise HTTPException(status_code=400, detail=error_msg)
 
 
 def register_box_number(request: RegisterBoxNumberRequest, db: Session) -> RegisterBoxNumberResponse:
