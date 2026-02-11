@@ -686,7 +686,7 @@ def batch_update_order(
             # 8.3 Log request to external API
             logger.info("Sending packing request to external API")
             logger.info(f"URL: http://localhost:5053/api/Packing")
-            logger.debug(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
+            logger.info(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
             
             # 8.4 Send POST to external Packing API
             external_api_url = "http://localhost:5053/api/Packing"
@@ -702,7 +702,7 @@ def batch_update_order(
             
             # 8.6 Log response from external API
             logger.info(f"External Packing API response - Status: {response.status_code}")
-            logger.debug(f"Response Body: {response.text}")
+            logger.info(f"Response Body: {response.text}")
             
             # 8.7 Check response status
             if response.status_code != 201:
@@ -793,7 +793,7 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
         # Step 2: Log request to external API
         logger.info("Sending stock transfer request to external API")
         logger.info(f"URL: http://localhost:5053/api/Traspasos/simple")
-        logger.debug(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
+        logger.info(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
         
         # Step 3: Send POST to external API with authentication
         external_api_url = "http://localhost:5053/api/Traspasos/simple"
@@ -809,7 +809,7 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
         
         # Step 4: Log response from external API
         logger.info(f"External API response - Status: {response.status_code}")
-        logger.debug(f"Response Body: {response.text}")
+        logger.info(f"Response Body: {response.text}")
         
         # Step 5: Check response status
         if response.status_code != 201:
