@@ -8,6 +8,7 @@ from typing import List, Optional
 from datetime import datetime, timezone
 import requests
 import json
+import os
 
 from src.adapters.secondary.database.orm import (
     Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula
@@ -717,12 +718,21 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
         print(json.dumps(external_payload, indent=2, ensure_ascii=False))
         print("="*80 + "\n")
         
-        # Step 3: Send POST to external API
+        # Step 3: Get API key from environment variable
+        external_api_key = os.getenv(
+            'EXTERNAL_API_KEY',
+            'T3sT3'
+        )
+        
+        # Step 4: Send POST to external API with authentication
         external_api_url = "http://localhost:5053/api/Traspasos/simple"
         response = requests.post(
             external_api_url,
             json=external_payload,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "X-API-Key": external_api_key
+            },
             timeout=10
         )
         
