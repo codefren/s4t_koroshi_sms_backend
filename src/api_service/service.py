@@ -9,9 +9,10 @@ from datetime import datetime, timezone
 import requests
 import json
 import os
+import logging
 
 from src.adapters.secondary.database.orm import (
-    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula
+    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
@@ -19,6 +20,12 @@ from src.api_service.schemas import (
     OrdersListResponse, OrderLineUpdate, BatchUpdateOrderResponse, RegisterStockRequest, RegisterStockResponse,
     RegisterBoxNumberRequest, RegisterBoxNumberResponse
 )
+
+# Logger configuration
+logger = logging.getLogger(__name__)
+
+# External API configuration
+EXTERNAL_API_KEY = os.getenv('EXTERNAL_API_KEY', 'T3sT3')
 
 
 def get_customer_b2b_orders(
@@ -628,30 +635,94 @@ def batch_update_order(
     
     # Flush changes to DB before counting
     db.flush()
-    
-    # 5. Check if ALL lines are completed
-    total_lines = db.query(OrderLine).filter(OrderLine.order_id == order.id).count()
-    completed_lines = db.query(OrderLine).filter(
-        OrderLine.order_id == order.id,
-        OrderLine.estado == 'COMPLETED'
-    ).count()
-    
-    # 6. Update order status to READY if all lines completed
-    if completed_lines == total_lines and total_lines > 0:
-        ready_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'READY').first()
-        if ready_status:
-            order.status_id = ready_status.id
-            order_status_code = 'READY'
-        else:
-            order_status_code = 'PENDING'
-    else:
-        pending_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'PENDING').first()
-        if pending_status:
-            order.status_id = pending_status.id
-        order_status_code = 'PENDING'
-    
+
+    ready_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'READY').first()
+    if ready_status:
+        order.status_id = ready_status.id
+        order_status_code = 'READY'
+
     # 7. Mark order as updated (first and only time) - blocks further updates
     order.fecha_fin_picking = datetime.now(timezone.utc)
+    
+    # 8. If order is READY, send to external Packing API
+    if order_status_code == 'READY':
+        try:
+            # 8.1 Build lines with box distribution
+            external_lines = []
+            
+            # Get all order lines with their box distributions
+            for order_line in db.query(OrderLine).filter(OrderLine.order_id == order.id).all():
+                # Get box distributions for this line
+                distributions = db.query(OrderLineBoxDistribution).filter(
+                    OrderLineBoxDistribution.order_line_id == order_line.id
+                ).all()
+                
+                if distributions:
+                    # Add one entry per box distribution
+                    for dist in distributions:
+                        packing_box = db.query(PackingBox).filter(
+                            PackingBox.id == dist.packing_box_id
+                        ).first()
+                        
+                        if packing_box and dist.quantity_in_box > 0:
+                            external_lines.append({
+                                "sku": order_line.product_reference.sku,
+                                "matricula": packing_box.codigo_caja,
+                                "cantidad": dist.quantity_in_box
+                            })
+            
+            # 8.2 Build external API payload
+            external_payload = {
+                "empresaId": "0001",
+                "almacenId": order.almacen.codigo if order.almacen else "00000001",
+                "clienteId": order.cliente,
+                "ordenServicioId": order.numero_orden,
+                "operarioId": "000001",
+                "generarTraspaso": True,
+                "tipoOperacionStockTraspaso": "SOLO_ENTRADAS",
+                "lineas": external_lines
+            }
+            
+            # 8.3 Log request to external API
+            logger.info("Sending packing request to external API")
+            logger.info(f"URL: http://localhost:5053/api/Packing")
+            logger.debug(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
+            
+            # 8.4 Send POST to external Packing API
+            external_api_url = "http://localhost:5053/api/Packing"
+            response = requests.post(
+                external_api_url,
+                json=external_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-API-Key": EXTERNAL_API_KEY
+                },
+                timeout=10
+            )
+            
+            # 8.6 Log response from external API
+            logger.info(f"External Packing API response - Status: {response.status_code}")
+            logger.debug(f"Response Body: {response.text}")
+            
+            # 8.7 Check response status
+            if response.status_code != 201:
+                db.rollback()
+                error_detail = f"External Packing API returned {response.status_code}: {response.text}"
+                logger.error(f"External Packing API error: {error_detail}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error al registrar packing en sistema externo: {error_detail}"
+                )
+            
+            logger.info("External Packing API returned 201 - Success!")
+            
+        except requests.exceptions.RequestException as e:
+            db.rollback()
+            error_msg = f"Error conectando con API externo de Packing: {str(e)}"
+            logger.error(f"Network error: {error_msg}")
+            raise HTTPException(status_code=400, detail=error_msg)
+        except HTTPException:
+            raise
     
     db.commit()
     
@@ -693,14 +764,24 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
     """
     try:
         # Step 1: Transform to Spanish format for external API
-        lineas_espanol = [
-            {
-                "ean": "",  # No tenemos EAN en el request original
+        lineas_espanol = []
+        
+        for item in request.stock_line:
+            # Buscar producto por SKU para obtener articuloId y colorId
+            product = db.query(ProductReference).filter(ProductReference.sku == item.sku).first()
+            
+            lineas_espanol.append({
+                "articuloId": str(product.id) if product else "",
+                "colorId": product.color_id if product else "",
+                "cantidades": {
+                    "additionalProp1": 0,
+                    "additionalProp2": 0,
+                    "additionalProp3": 0
+                },
+                "ean": "",
                 "sku": item.sku,
                 "cantidad": item.quantity
-            }
-            for item in request.stock_line
-        ]
+            })
         
         external_payload = {
             "empresaId": "0001",  # Hardcoded as requested
@@ -709,54 +790,40 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
             "lineas": lineas_espanol
         }
         
-        # Step 2: Print request to external API
-        print("\n" + "="*80)
-        print("ENVIANDO REQUEST AL API EXTERNO")
-        print("="*80)
-        print(f"URL: http://localhost:5053/api/Traspasos/simple")
-        print(f"Payload:")
-        print(json.dumps(external_payload, indent=2, ensure_ascii=False))
-        print("="*80 + "\n")
+        # Step 2: Log request to external API
+        logger.info("Sending stock transfer request to external API")
+        logger.info(f"URL: http://localhost:5053/api/Traspasos/simple")
+        logger.debug(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
         
-        # Step 3: Get API key from environment variable
-        external_api_key = os.getenv(
-            'EXTERNAL_API_KEY',
-            'T3sT3'
-        )
-        
-        # Step 4: Send POST to external API with authentication
+        # Step 3: Send POST to external API with authentication
         external_api_url = "http://localhost:5053/api/Traspasos/simple"
         response = requests.post(
             external_api_url,
             json=external_payload,
             headers={
                 "Content-Type": "application/json",
-                "X-API-Key": external_api_key
+                "X-API-Key": EXTERNAL_API_KEY
             },
             timeout=10
         )
         
-        # Step 4: Print response from external API
-        print("\n" + "="*80)
-        print("RESPONSE DEL API EXTERNO")
-        print("="*80)
-        print(f"Status Code: {response.status_code}")
-        print(f"Response Body: {response.text}")
-        print("="*80 + "\n")
+        # Step 4: Log response from external API
+        logger.info(f"External API response - Status: {response.status_code}")
+        logger.debug(f"Response Body: {response.text}")
         
         # Step 5: Check response status
         if response.status_code != 201:
             # External API failed - rollback and return error
             db.rollback()
             error_detail = f"External API returned {response.status_code}: {response.text}"
-            print(f"ERROR: {error_detail}")
+            logger.error(f"External API error: {error_detail}")
             raise HTTPException(
                 status_code=400,
                 detail=f"Error al registrar en sistema externo: {error_detail}"
             )
         
         # Step 6: External API returned 201 - proceed with local DB storage
-        print("External API returned 201 - Proceeding with local DB storage...\n")
+        logger.info("External API returned 201 - Proceeding with local DB storage")
         
         # Step 7: Accumulate quantities by SKU (handle duplicates)
         sku_quantities = {}
@@ -805,7 +872,7 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
         
         # Step 9: Commit all changes to local DB
         db.commit()
-        print(f"Successfully saved {records_created} records to local DB\n")
+        logger.info(f"Successfully saved {records_created} records to local DB")
         
         # Step 10: Return summary
         return RegisterStockResponse(
@@ -821,7 +888,7 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
         # Network error or timeout
         db.rollback()
         error_msg = f"Error conectando con API externo: {str(e)}"
-        print(f"ERROR: {error_msg}")
+        logger.error(f"Network error: {error_msg}")
         raise HTTPException(status_code=400, detail=error_msg)
     except HTTPException:
         # Re-raise HTTPException without modification
@@ -830,7 +897,7 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
         # Any other error
         db.rollback()
         error_msg = f"Error al registrar stock: {str(e)}"
-        print(f"ERROR: {error_msg}")
+        logger.error(f"Error: {error_msg}")
         raise HTTPException(status_code=400, detail=error_msg)
 
 
