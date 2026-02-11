@@ -141,12 +141,10 @@ def create_packing_box(
     operator = db.query(Operator).filter(Operator.id == new_box.operator_id).first() if new_box.operator_id else None
     
     # Construir respuesta
-    response = PackingBoxWithOperator(
-        **new_box.__dict__,
-        operator=OperatorResponse(**operator.__dict__) if operator else None
-    )
+    box_data = PackingBoxWithOperator.model_validate(new_box)
+    box_data.operator = OperatorResponse.model_validate(operator) if operator else None
     
-    return response
+    return box_data
 
 
 @router.get("/orders/{order_id}/boxes", response_model=List[PackingBoxWithOperator])
@@ -185,12 +183,9 @@ def list_order_boxes(
     result = []
     for box in boxes:
         operator = db.query(Operator).filter(Operator.id == box.operator_id).first() if box.operator_id else None
-        result.append(
-            PackingBoxWithOperator(
-                **box.__dict__,
-                operator=OperatorResponse(**operator.__dict__) if operator else None
-            )
-        )
+        box_data = PackingBoxWithOperator.model_validate(box)
+        box_data.operator = OperatorResponse.model_validate(operator) if operator else None
+        result.append(box_data)
     
     return result
 
@@ -226,11 +221,9 @@ def get_box_detail(
     order_lines = db.query(OrderLine).filter(OrderLine.packing_box_id == box_id).all()
     
     # Construir respuesta
-    response = PackingBoxDetail(
-        **box.__dict__,
-        operator=OperatorResponse(**operator.__dict__) if operator else None,
-        items=[OrderLineResponse(**line.__dict__) for line in order_lines]
-    )
+    response = PackingBoxDetail.model_validate(box)
+    response.operator = OperatorResponse.model_validate(operator) if operator else None
+    response.items = [OrderLineResponse.model_validate(line) for line in order_lines]
     
     return response
 
@@ -281,22 +274,23 @@ def update_box(
     # Cargar operario para respuesta
     operator = db.query(Operator).filter(Operator.id == box.operator_id).first() if box.operator_id else None
     
-    response = PackingBoxWithOperator(
-        **box.__dict__,
-        operator=OperatorResponse(**operator.__dict__) if operator else None
-    )
+    response = PackingBoxWithOperator.model_validate(box)
+    response.operator = OperatorResponse.model_validate(operator) if operator else None
     
     return response
 
 
-@router.put("/{box_id}/close", response_model=PackingBoxWithOperator)
+@router.put("/{codigo_caja}/close", response_model=PackingBoxWithOperator)
 def close_box(
-    box_id: int,
+    codigo_caja: str,
     close_data: PackingBoxClose,
     db: Session = Depends(get_db)
 ):
     """
     Cierra una caja de embalaje.
+    
+    **Parámetros:**
+    - `codigo_caja`: Código único de la caja (ej: "ORD-12345-BOX-001")
     
     **Validaciones:**
     - La caja debe existir
@@ -312,12 +306,12 @@ def close_box(
     **Retorna:**
     - Información de la caja cerrada
     """
-    box = db.query(PackingBox).filter(PackingBox.id == box_id).first()
+    box = db.query(PackingBox).filter(PackingBox.codigo_caja == codigo_caja).first()
     
     if not box:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Caja con ID {box_id} no encontrada"
+            detail=f"Caja con código '{codigo_caja}' no encontrada"
         )
     
     # Validar que está OPEN
@@ -351,7 +345,7 @@ def close_box(
     
     # Actualizar orden (quitar caja activa)
     order = db.query(Order).filter(Order.id == box.order_id).first()
-    if order.caja_activa_id == box_id:
+    if order.caja_activa_id == box.id:
         order.caja_activa_id = None
     
     # Registrar en historial
@@ -378,9 +372,7 @@ def close_box(
     # Cargar operario para respuesta
     operator = db.query(Operator).filter(Operator.id == box.operator_id).first() if box.operator_id else None
     
-    response = PackingBoxWithOperator(
-        **box.__dict__,
-        operator=OperatorResponse(**operator.__dict__) if operator else None
-    )
+    response = PackingBoxWithOperator.model_validate(box)
+    response.operator = OperatorResponse.model_validate(operator) if operator else None
     
     return response

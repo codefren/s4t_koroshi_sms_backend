@@ -47,13 +47,20 @@ def get_db():
 # UTILIDADES
 # ============================================================================
 
-def _calculate_total_stock(product: ProductReference) -> int:
+def _calculate_total_stock(product: ProductReference, almacen_id: Optional[int] = None) -> int:
     """Calcula el stock total de un producto sumando todas sus ubicaciones."""
-    return sum(loc.stock_actual for loc in product.locations if loc.activa)
+    locations = product.locations
+    
+    # Filtrar por almacén si se especifica
+    if almacen_id:
+        locations = [loc for loc in locations if loc.almacen_id == almacen_id]
+    
+    return sum(loc.stock_actual for loc in locations if loc.activa)
 
 
 def _format_locations_for_list(
     locations: list[ProductLocation], 
+    almacen_id: Optional[int] = None,
     max_display: int = 2
 ) -> list[LocationItem]:
     """
@@ -61,13 +68,18 @@ def _format_locations_for_list(
     
     Args:
         locations: Lista de ubicaciones del producto
+        almacen_id: ID del almacén para filtrar ubicaciones (opcional)
         max_display: Número máximo de ubicaciones a mostrar antes del "+X más"
         
     Returns:
         Lista de LocationItem formateados
     """
-    # Filtrar solo ubicaciones activas y ordenar por prioridad
+    # Filtrar solo ubicaciones activas y del almacén especificado
     active_locs = [loc for loc in locations if loc.activa]
+    
+    if almacen_id:
+        active_locs = [loc for loc in active_locs if loc.almacen_id == almacen_id]
+    
     active_locs.sort(key=lambda x: (x.prioridad, -x.stock_actual))
     
     result = []
@@ -154,6 +166,10 @@ def list_products(
         None,
         description="Buscar por nombre, SKU, categoría o referencia"
     ),
+    almacen_id: Optional[int] = Query(
+        None,
+        description="Filtrar productos por almacén específico"
+    ),
     page: int = Query(1, ge=1, description="Número de página"),
     per_page: int = Query(20, ge=1, le=100, description="Productos por página"),
     db: Session = Depends(get_db)
@@ -164,6 +180,7 @@ def list_products(
     **Filtros disponibles:**
     - `status`: all, active (stock >= 50), low (stock 1-49), out (stock = 0)
     - `search`: Busca en nombre, SKU, categoría (descripción_color) o referencia
+    - `almacen_id`: Filtra productos por almacén específico
     
     **Respuesta:**
     - Lista de productos con ubicaciones limitadas (primeras 2 + "+X más")
@@ -171,10 +188,32 @@ def list_products(
     - Stock total calculado
     - Estado calculado automáticamente
     """
-    # Query base con ubicaciones pre-cargadas
-    query = db.query(ProductReference).options(
-        joinedload(ProductReference.locations)
+    # Subconsulta para calcular stock total por producto (optimizado)
+    stock_subquery_filters = [ProductLocation.activa == True]
+    if almacen_id:
+        stock_subquery_filters.append(ProductLocation.almacen_id == almacen_id)
+    
+    stock_subquery = (
+        db.query(
+            ProductLocation.product_id,
+            func.coalesce(func.sum(ProductLocation.stock_actual), 0).label('total_stock')
+        )
+        .filter(*stock_subquery_filters)
+        .group_by(ProductLocation.product_id)
+        .subquery()
     )
+    
+    # Query base con stock calculado en SQL
+    query = db.query(
+        ProductReference,
+        func.coalesce(stock_subquery.c.total_stock, 0).label('stock_total')
+    ).outerjoin(
+        stock_subquery, ProductReference.id == stock_subquery.c.product_id
+    )
+    
+    # Filtrar por almacén si se especifica (solo productos con ubicaciones en ese almacén)
+    if almacen_id:
+        query = query.filter(stock_subquery.c.product_id.isnot(None))
     
     # Aplicar búsqueda
     if search:
@@ -188,43 +227,54 @@ def list_products(
             )
         )
     
-    # Aplicar filtro de estado
-    # Nota: El filtro se aplica después para no afectar la búsqueda
-    # Si necesitas mejor performance, considera agregar columna 'stock_total' calculada
+    # Aplicar filtro de estado en SQL (mucho más eficiente)
+    if status == ProductStatusFilter.OUT:
+        query = query.filter(func.coalesce(stock_subquery.c.total_stock, 0) == 0)
+    elif status == ProductStatusFilter.LOW:
+        query = query.filter(
+            func.coalesce(stock_subquery.c.total_stock, 0) > 0,
+            func.coalesce(stock_subquery.c.total_stock, 0) < 50
+        )
+    elif status == ProductStatusFilter.ACTIVE:
+        query = query.filter(func.coalesce(stock_subquery.c.total_stock, 0) >= 50)
     
-    # Contar total antes de paginar
+    # Contar total DESPUÉS de aplicar todos los filtros
     total = query.count()
     
-    # Aplicar ordenamiento (requerido por SQL Server para OFFSET/LIMIT)
+    # Aplicar ordenamiento
     query = query.order_by(ProductReference.id.asc())
     
     # Aplicar paginación
     offset = (page - 1) * per_page
-    products = query.offset(offset).limit(per_page).all()
+    results = query.offset(offset).limit(per_page).all()
     
-    # Filtrar por estado en memoria (para simplicidad)
-    # Para mejor performance con muchos registros, mover el filtro a SQL
-    filtered_products = []
-    for product in products:
-        stock = _calculate_total_stock(product)
-        status_text, status_class = calculate_product_status(stock)
-        
-        # Aplicar filtro de estado
-        if status != ProductStatusFilter.ALL:
-            if status == ProductStatusFilter.ACTIVE and status_class != "active":
-                continue
-            elif status == ProductStatusFilter.LOW and status_class != "low-stock":
-                continue
-            elif status == ProductStatusFilter.OUT and status_class != "out-of-stock":
-                continue
-        
-        filtered_products.append(product)
+    # Obtener IDs de productos para cargar ubicaciones eficientemente
+    product_ids = [product.id for product, _ in results]
     
-    # Construir respuesta
+    # Cargar ubicaciones en una sola query
+    locations_query = db.query(ProductLocation).filter(
+        ProductLocation.product_id.in_(product_ids),
+        ProductLocation.activa == True
+    )
+    if almacen_id:
+        locations_query = locations_query.filter(ProductLocation.almacen_id == almacen_id)
+    
+    all_locations = locations_query.all()
+    
+    # Agrupar ubicaciones por producto
+    locations_by_product = {}
+    for loc in all_locations:
+        if loc.product_id not in locations_by_product:
+            locations_by_product[loc.product_id] = []
+        locations_by_product[loc.product_id].append(loc)
+    
+    # Construir respuesta (stock ya calculado en SQL)
     product_items = []
-    for product in filtered_products:
-        stock = _calculate_total_stock(product)
-        status_text, status_class = calculate_product_status(stock)
+    for product, stock_total in results:
+        status_text, status_class = calculate_product_status(stock_total)
+        
+        # Obtener ubicaciones del producto
+        product_locations = locations_by_product.get(product.id, [])
         
         product_items.append(ProductListItem(
             id=product.id,
@@ -232,9 +282,9 @@ def list_products(
             name=product.nombre_producto,
             category=product.temporada or "Sin temporada",
             talla=product.talla,
-            image=None,  # TODO: Agregar soporte para imágenes
-            locations=_format_locations_for_list(product.locations),
-            stock=stock,
+            image=None,
+            locations=_format_locations_for_list(product_locations, almacen_id),
+            stock=int(stock_total),
             status=status_text,
             statusClass=status_class
         ))

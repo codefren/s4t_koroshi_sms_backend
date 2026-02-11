@@ -8,7 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from datetime import datetime
 
 from .manager import manager
-from ...secondary.database.orm import Operator, Order, OrderLine
+from ...secondary.database.orm import Operator, Order, OrderLine, OrderLineBoxDistribution, PackingBox, ReplenishmentRequest, ProductLocation
 
 
 router = APIRouter()
@@ -87,6 +87,13 @@ async def operator_websocket_endpoint(
                     websocket, 
                     operator_id,  # ID numérico para validaciones
                     codigo_operario,  # Código para respuestas
+                    data.get("data", {})
+                )
+            elif action == "request_replenishment":
+                await handle_request_replenishment(
+                    websocket,
+                    operator_id,
+                    codigo_operario,
                     data.get("data", {})
                 )
             else:
@@ -200,6 +207,39 @@ async def handle_scan_product(
         # 5. Incrementar cantidad servida en +1
         line.cantidad_servida += 1
         
+        # 5.1. EMPAQUE AUTOMÁTICO en caja activa usando OrderLineBoxDistribution
+        if order.caja_activa_id:
+            # Buscar distribución existente para esta línea en esta caja
+            distribution = db.query(OrderLineBoxDistribution).filter(
+                OrderLineBoxDistribution.order_line_id == line.id,
+                OrderLineBoxDistribution.packing_box_id == order.caja_activa_id
+            ).first()
+            
+            if distribution:
+                # Ya existe, incrementar cantidad
+                distribution.quantity_in_box += 1
+            else:
+                # Crear nueva distribución
+                distribution = OrderLineBoxDistribution(
+                    order_line_id=line.id,
+                    packing_box_id=order.caja_activa_id,
+                    quantity_in_box=1,
+                    fecha_empacado=datetime.utcnow()
+                )
+                db.add(distribution)
+            
+            # Actualizar contador de items en la caja
+            box = db.query(PackingBox).filter(
+                PackingBox.id == order.caja_activa_id
+            ).first()
+            if box:
+                box.total_items += 1
+            
+            # Marcar la línea como empacada si se completó
+            if line.cantidad_servida >= line.cantidad_solicitada:
+                line.packing_box_id = order.caja_activa_id
+                line.fecha_empacado = datetime.utcnow()
+        
         # 6. Actualizar estado de la línea
         if line.cantidad_servida == line.cantidad_solicitada:
             line.estado = "COMPLETED"
@@ -228,8 +268,8 @@ async def handle_scan_product(
         producto_nombre = "Producto"
         if line.product_reference:
             producto_nombre = line.product_reference.nombre_producto
-            if line.product_reference.color:
-                producto_nombre += f" {line.product_reference.color}"
+            if line.product_reference.nombre_color:
+                producto_nombre += f" {line.product_reference.nombre_color}"
             if line.product_reference.talla:
                 producto_nombre += f" {line.product_reference.talla}"
         
@@ -268,6 +308,175 @@ async def handle_scan_product(
         db.rollback()
     finally:
         # Siempre cerrar la sesión
+        db.close()
+
+
+async def handle_request_replenishment(
+    websocket: WebSocket,
+    operator_id: int,
+    codigo_operario: str,
+    data: dict
+):
+    """
+    Procesa solicitud de reposición automática desde PDA.
+    
+    Cuando el operador encuentra una ubicación sin stock durante el picking,
+    presiona "Siguiente SKU" y se crea automáticamente una solicitud de reposición.
+    
+    Args:
+        websocket: Conexión WebSocket
+        operator_id: ID del operario solicitante
+        codigo_operario: Código del operario (para respuestas)
+        data: Datos de la solicitud (location_destino_id, product_id, order_id opcional)
+    """
+    from ...secondary.database.config import SessionLocal
+    db = SessionLocal()
+    
+    try:
+        # Validaciones de entrada
+        location_destino_id = data.get("location_destino_id")
+        product_id = data.get("product_id")
+        order_id = data.get("order_id")
+        requested_quantity = data.get("requested_quantity")
+        
+        if not location_destino_id:
+            await send_error(websocket, "MISSING_LOCATION", "Falta el ID de ubicación destino")
+            return
+        
+        if not product_id:
+            await send_error(websocket, "MISSING_PRODUCT", "Falta el ID de producto")
+            return
+        
+        # 1. Validar ubicación destino existe
+        location_destino = db.query(ProductLocation).filter_by(id=location_destino_id).first()
+        if not location_destino:
+            await send_error(websocket, "LOCATION_NOT_FOUND", "Ubicación destino no encontrada")
+            return
+        
+        # 2. Buscar ubicación con stock disponible (zona reposición)
+        # Prioridad: ubicaciones con pasillo que empiece con "REP" o mayor stock
+        location_origen = None
+        available_locations = db.query(ProductLocation).filter(
+            ProductLocation.product_id == product_id,
+            ProductLocation.almacen_id == location_destino.almacen_id,
+            ProductLocation.activa == True,
+            ProductLocation.id != location_destino_id,
+            ProductLocation.stock_actual > 0
+        ).all()
+        
+        # Filtrar ubicaciones de reposición
+        replenishment_locations = [
+            loc for loc in available_locations
+            if loc.pasillo and loc.pasillo.upper().startswith("REP")
+        ]
+        
+        if replenishment_locations:
+            # Ordenar por stock descendente
+            replenishment_locations.sort(key=lambda x: -x.stock_actual)
+            location_origen = replenishment_locations[0]
+        elif available_locations:
+            # Si no hay zona específica, usar ubicación con más stock
+            available_locations.sort(key=lambda x: -x.stock_actual)
+            location_origen = available_locations[0]
+        
+        # 3. Calcular cantidad solicitada
+        if not requested_quantity:
+            # Calcular déficit: stock_minimo - stock_actual
+            deficit = max(location_destino.stock_minimo - location_destino.stock_actual, 1)
+            requested_quantity = deficit
+        
+        # 4. Determinar estado y prioridad
+        if location_origen:
+            status = "READY"  # Hay stock disponible
+            origin_id = location_origen.id
+        else:
+            status = "WAITING_STOCK"  # No hay stock disponible
+            origin_id = None
+        
+        # Calcular prioridad
+        if location_destino.stock_actual == 0:
+            priority = "URGENT"
+        elif location_destino.stock_actual < (location_destino.stock_minimo * 0.5):
+            priority = "HIGH"
+        else:
+            priority = "NORMAL"
+        
+        # 5. Verificar si ya existe solicitud pendiente para este producto/ubicación
+        existing_request = db.query(ReplenishmentRequest).filter(
+            ReplenishmentRequest.product_id == product_id,
+            ReplenishmentRequest.location_destino_id == location_destino_id,
+            ReplenishmentRequest.status.in_(["WAITING_STOCK", "READY", "IN_PROGRESS"])
+        ).first()
+        
+        if existing_request:
+            await manager.send_message(codigo_operario, {
+                "action": "replenishment_duplicate",
+                "data": {
+                    "request_id": existing_request.id,
+                    "status": existing_request.status,
+                    "message": "⚠️ Ya existe una solicitud de reposición pendiente para este producto en esta ubicación",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            })
+            return
+        
+        # 6. Crear solicitud de reposición
+        replenishment_request = ReplenishmentRequest(
+            location_origen_id=origin_id,
+            location_destino_id=location_destino_id,
+            product_id=product_id,
+            requested_quantity=requested_quantity,
+            status=status,
+            priority=priority,
+            requester_id=operator_id,
+            order_id=order_id,
+            requested_at=datetime.utcnow()
+        )
+        
+        db.add(replenishment_request)
+        db.commit()
+        db.refresh(replenishment_request)
+        
+        # 7. Preparar respuesta
+        origin_code = None
+        origin_stock = None
+        if location_origen:
+            origin_code = location_origen.codigo_ubicacion
+            origin_stock = location_origen.stock_actual
+        
+        # 8. Enviar confirmación al operario
+        await manager.send_message(codigo_operario, {
+            "action": "replenishment_created",
+            "data": {
+                "request_id": replenishment_request.id,
+                "status": status,
+                "priority": priority,
+                "requested_quantity": requested_quantity,
+                "location_destination": {
+                    "id": location_destino.id,
+                    "code": location_destino.codigo_ubicacion,
+                    "stock_actual": location_destino.stock_actual
+                },
+                "location_origin": {
+                    "id": origin_id,
+                    "code": origin_code,
+                    "stock_available": origin_stock
+                } if location_origen else None,
+                "message": "✅ Solicitud de reposición creada" if status == "READY" else "⚠️ Solicitud creada pero sin stock disponible",
+                "can_continue": True,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        })
+        
+        print(f"✅ Solicitud de reposición #{replenishment_request.id} creada por operario {codigo_operario} - Estado: {status}")
+    
+    except Exception as e:
+        print(f"❌ Error en handle_request_replenishment: {e}")
+        import traceback
+        traceback.print_exc()
+        await send_error(websocket, "INTERNAL_ERROR", f"Error creando solicitud: {str(e)}")
+        db.rollback()
+    finally:
         db.close()
 
 

@@ -14,6 +14,7 @@ from src.adapters.primary.api.order_router import router as order_router
 from src.adapters.primary.api.operator_router import router as operator_router
 from src.adapters.primary.api.product_router import router as product_router
 from src.adapters.primary.api.packing_boxes_router import router as packing_boxes_router
+from src.adapters.primary.api.replenishment_router import router as replenishment_router
 from src.adapters.primary.api.websockets import ws_router
 from src.adapters.primary.websocket.operator_websocket import router as operator_ws_router
 from src.api_service.routes import router as api_service_router
@@ -45,6 +46,8 @@ app.add_middleware(
         "http://192.168.1.14:8000",
         "http://192.168.1.14:19000",  # Expo Metro bundler
         "http://192.168.1.14:19006",  # Expo web
+        "http://172.20.10.9:8000",  # API Backend
+        "http://172.20.10.9:8081",  # Cliente PDA
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
@@ -61,9 +64,28 @@ app.include_router(order_router, prefix="/api/v1")
 app.include_router(operator_router, prefix="/api/v1")
 app.include_router(product_router, prefix="/api/v1")
 app.include_router(packing_boxes_router, prefix="/api/v1")
+app.include_router(replenishment_router, prefix="/api/v1")
 app.include_router(ws_router)
 app.include_router(operator_ws_router, tags=["WebSocket PDA"])
 app.include_router(api_service_router, prefix="/api/service", tags=["B2B Service API"])
+
+@app.get("/")
+def root():
+    """Endpoint raíz de la API."""
+    return {
+        "message": "S4T Koroshi SMS Backend API",
+        "version": "1.0.0",
+        "status": "running",
+        "endpoints": {
+            "docs": "/docs",
+            "health": "/health",
+            "orders": "/api/v1/orders",
+            "operators": "/api/v1/operators",
+            "products": "/api/v1/products",
+            "packing_boxes": "/api/v1/packing-boxes",
+            "replenishment": "/api/v1/replenishment"
+        }
+    }
 
 @app.get("/health")
 def health_check():

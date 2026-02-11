@@ -51,6 +51,8 @@ def get_security_config() -> SecurityConfig:
             "http://192.168.1.14:8000",  # React Native app
             "http://192.168.1.14:19000",  # Expo Metro bundler
             "http://192.168.1.14:19006",  # Expo web
+            "http://172.20.10.9:8000",  # API Backend
+            "http://172.20.10.9:8081",  # Cliente PDA
         ],
         cors_allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         cors_allow_headers=["*"],
@@ -112,6 +114,7 @@ def get_security_config() -> SecurityConfig:
             "127.0.0.1",      # IPv4 localhost
             "::1",            # IPv6 localhost
             "127.0.0.0/8",    # IPv4 localhost range
+            "172.20.10.9",    # Cliente PDA
         ],
         
         # === IP BLACKLISTING (Optional) ===

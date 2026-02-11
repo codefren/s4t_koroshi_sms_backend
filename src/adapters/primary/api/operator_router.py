@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from src.adapters.secondary.database.config import get_db
-from src.adapters.secondary.database.orm import Operator, Order, OrderLine, OrderStatus
+from src.adapters.secondary.database.orm import Operator, Order, OrderLine, OrderStatus, ProductLocation
 from src.core.domain.models import (
     OperatorResponse,
     OperatorCreate,
@@ -230,6 +230,8 @@ def list_operator_orders(
     # Obtener órdenes asignadas al operario
     orders = db.query(Order).filter(
         Order.operator_id == operator.id
+    ).filter(
+        Order.status_id.in_([2, 3])
     ).order_by(Order.created_at.desc()).all()
     
     # Formatear respuesta
@@ -296,15 +298,33 @@ def list_order_lines(
     # Formatear respuesta
     result = []
     for line in lines:
-        # Construir ubicación completa si existe
+        # Buscar ubicación de picking (almacen_id=2) desde ProductLocation
+        picking_location = None
+        ubicacion_id = None
         ubicacion = None
-        if line.product_location:
-            ubicacion = {
-                "codigo": f"{line.product_location.pasillo}-{line.product_location.lado[:3]}-{line.product_location.ubicacion}-H{line.product_location.altura}",
-                "pasillo": line.product_location.pasillo,
-                "lado": line.product_location.lado,
-                "altura": line.product_location.altura
-            }
+        
+        if line.product_reference_id:
+            # Buscar la mejor ubicación en el almacén de picking
+            picking_location = db.query(ProductLocation).filter(
+                ProductLocation.product_id == line.product_reference_id,
+                ProductLocation.almacen_id == 2,  # Almacén de picking
+                ProductLocation.activa == True
+            ).order_by(
+                ProductLocation.prioridad.asc(),      # 1 = alta prioridad primero
+                ProductLocation.stock_actual.desc()   # Mayor stock primero
+            ).first()
+            
+            if picking_location:
+                ubicacion_id = picking_location.id
+                ubicacion = {
+                    "codigo": picking_location.codigo_ubicacion,
+                    "pasillo": picking_location.pasillo,
+                    "lado": picking_location.lado,
+                    "ubicacion": picking_location.ubicacion,
+                    "altura": picking_location.altura,
+                    "stock_actual": picking_location.stock_actual,
+                    "stock_minimo": picking_location.stock_minimo
+                }
         
         # Información del producto
         producto = None
@@ -318,6 +338,8 @@ def list_order_lines(
         
         result.append({
             "id": line.id,
+            "producto_id": line.product_reference_id,
+            "ubicacion_id": ubicacion_id,  # ID de ubicación en almacén de picking
             "ean": line.ean,
             "producto": producto,
             "ubicacion": ubicacion,

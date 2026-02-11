@@ -912,7 +912,7 @@ class ProductLocation(Base):
     
     # Observaciones o notas sobre esta ubicación
     # Ejemplo: "Zona de alta rotación", "Revisar vencimiento", etc.
-    observaciones = Column(Text, nullable=True)
+    # observaciones = Column(Text, nullable=True)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -959,120 +959,66 @@ class ProductLocation(Base):
         return self.stock_actual < self.stock_minimo
 
 
-# class StockMovement(Base):
-#     """
-#     Registro de movimientos de inventario (entradas, salidas, ajustes, transferencias).
+class ReplenishmentRequest(Base):
+    """
+    Stock replenishment requests between locations.
     
-#     Cada movimiento afecta el stock de un producto en un almacén específico.
-#     Mantiene trazabilidad completa de todas las operaciones de inventario.
+    Created automatically from PDA (WebSocket) when operator finds location without stock.
     
-#     Tipos de movimiento:
-#     - ENTRADA: Recepción de mercancía (compra, devolución cliente, producción)
-#     - SALIDA: Despacho de mercancía (venta, devolución proveedor, merma)
-#     - AJUSTE: Corrección manual de inventario (conteo físico, corrección error)
-#     - TRANSFERENCIA: Movimiento entre almacenes (requiere 2 registros: salida+entrada)
+    States:
+    - WAITING_STOCK: No stock available in replenishment zone
+    - READY: Stock available, ready to execute
+    - IN_PROGRESS: Replenishment operator executing
+    - COMPLETED: Replenishment completed, stock updated
+    - REJECTED: Rejected (e.g., discontinued product)
+    """
+    __tablename__ = "replenishment_requests"
     
-#     Flujo típico:
-#     1. Se registra movimiento con cantidad (+ o -)
-#     2. Se guarda stock_anterior
-#     3. Se actualiza stock en ProductLocation
-#     4. Se guarda stock_nuevo
-#     5. Se registra operador y referencia documento
+    id = Column(Integer, primary_key=True, autoincrement=True)
     
-#     Ejemplo transferencia:
-#     - Registro 1: SALIDA de Almacén A (-10 unidades)
-#     - Registro 2: ENTRADA en Almacén B (+10 unidades)
-#     - Ambos con misma referencia_documento para trazabilidad
-#     """
-#     __tablename__ = "stock_movements"
+    # Origin: replenishment zone (can be NULL if no stock)
+    location_origen_id = Column(Integer, ForeignKey("product_locations.id", ondelete="NO ACTION"), nullable=True, index=True)
+    # Destination: picking zone (always present)
+    location_destino_id = Column(Integer, ForeignKey("product_locations.id", ondelete="NO ACTION"), nullable=False, index=True)
     
-#     id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("product_references.id", ondelete="NO ACTION"), nullable=False, index=True)
+    requested_quantity = Column(Integer, nullable=False)
     
-#     # === REFERENCIAS ===
+    # WAITING_STOCK, READY, IN_PROGRESS, COMPLETED, REJECTED
+    status = Column(String(20), nullable=False, default="WAITING_STOCK", index=True)
     
-#     # Almacén donde ocurre el movimiento
-#     almacen_id = Column(Integer, ForeignKey("almacenes.id", ondelete="NO ACTION"), nullable=False, index=True)
+    # URGENT, HIGH, NORMAL
+    priority = Column(String(20), nullable=False, default="NORMAL", index=True)
     
-#     # Producto afectado por el movimiento
-#     product_id = Column(Integer, ForeignKey("product_references.id", ondelete="NO ACTION"), nullable=False, index=True)
+    requester_id = Column(Integer, ForeignKey("operators.id", ondelete="NO ACTION"), nullable=False, index=True)
+    executor_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True, index=True)
     
-#     # Operario que realizó el movimiento
-#     operator_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True, index=True)
+    requested_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
     
-#     # Ubicación específica afectada (opcional - puede ser a nivel almacén)
-#     location_id = Column(Integer, ForeignKey("product_locations.id", ondelete="SET NULL"), nullable=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id", ondelete="SET NULL"), nullable=True, index=True)
+    notes = Column(Text, nullable=True)
     
-#     # === DATOS DEL MOVIMIENTO ===
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
-#     # Tipo de movimiento
-#     # ENTRADA: recepción de mercancía
-#     # SALIDA: despacho de mercancía (picking completado)
-#     # AJUSTE: corrección manual de inventario
-#     # TRANSFERENCIA: movimiento entre almacenes
-#     tipo_movimiento = Column(String(20), nullable=False, index=True)
+    # Relationships
+    location_origin = relationship("ProductLocation", foreign_keys=[location_origen_id])
+    location_destination = relationship("ProductLocation", foreign_keys=[location_destino_id])
+    product = relationship("ProductReference")
+    requester = relationship("Operator", foreign_keys=[requester_id])
+    executor = relationship("Operator", foreign_keys=[executor_id])
+    order = relationship("Order")
     
-#     # Cantidad del movimiento
-#     # Positivo = aumenta stock (ENTRADA)
-#     # Negativo = disminuye stock (SALIDA)
-#     # Para AJUSTE puede ser positivo o negativo según corrección
-#     cantidad = Column(Integer, nullable=False)
+    __table_args__ = (
+        Index('idx_status_priority_date', 'status', 'priority', 'requested_at'),
+        Index('idx_product_destination', 'product_id', 'location_destino_id'),
+        Index('idx_requester_status', 'requester_id', 'status'),
+    )
     
-#     # Stock antes del movimiento (para auditoría)
-#     stock_anterior = Column(Integer, nullable=False)
-    
-#     # Stock después del movimiento (para auditoría)
-#     stock_nuevo = Column(Integer, nullable=False)
-    
-#     # === TRAZABILIDAD ===
-    
-#     # Referencia al documento que origina el movimiento
-#     # Ejemplos: número de orden, factura, remito, número de transferencia
-#     # Para picking: numero_orden
-#     # Para compra: número de factura
-#     # Para ajuste: "AJUSTE-2026-001"
-#     referencia_documento = Column(String(100), nullable=True, index=True)
-    
-#     # Motivo o descripción del movimiento
-#     # Ejemplos: "Picking orden ORD-12345", "Compra factura FC-001", 
-#     #           "Ajuste por inventario físico", "Transferencia a almacén central"
-#     motivo = Column(String(500), nullable=False)
-    
-#     # Observaciones adicionales (opcional)
-#     observaciones = Column(Text, nullable=True)
-    
-#     # === METADATOS ===
-    
-#     # Metadata extensible en formato JSON
-#     # Puede incluir: costos, lote, fecha_vencimiento, proveedor, etc.
-#     # Nota: Se usa 'event_metadata' en lugar de 'metadata' porque este último
-#     # es palabra reservada de SQLAlchemy
-#     event_metadata = Column(JSON, nullable=True)
-    
-#     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
-    
-#     # Relationships
-#     almacen = relationship("Almacen", backref="stock_movements")
-#     product = relationship("ProductReference", backref="stock_movements")
-#     operator = relationship("Operator", backref="stock_movements")
-#     location = relationship("ProductLocation", backref="stock_movements")
-    
-#     __table_args__ = (
-#         # Índice compuesto para consultas por almacén y producto
-#         Index('idx_almacen_product', 'almacen_id', 'product_id'),
-#         # Índice para consultas de movimientos por tipo
-#         Index('idx_tipo_movimiento_fecha', 'tipo_movimiento', 'created_at'),
-#         # Índice para búsqueda por referencia documento
-#         Index('idx_referencia_documento', 'referencia_documento'),
-#         # Índice compuesto para reportes por almacén y fecha
-#         Index('idx_almacen_fecha', 'almacen_id', 'created_at'),
-#         # Índice para auditoría por producto y fecha
-#         Index('idx_product_fecha', 'product_id', 'created_at'),
-#         # Check constraint: cantidad no puede ser 0
-#         # Check constraint: stock_nuevo debe ser >= 0 (no permitir stock negativo)
-#     )
-    
-#     def __repr__(self):
-#         return f"<StockMovement {self.tipo_movimiento} {self.cantidad} units of product_id={self.product_id} at almacen_id={self.almacen_id}>"
+    def __repr__(self):
+        return f"<ReplenishmentRequest {self.id} {self.status} product_id={self.product_id}>"
 
 
 class APIStockHistorico(Base):

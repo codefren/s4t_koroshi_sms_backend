@@ -15,7 +15,8 @@ from src.adapters.secondary.database.orm import (
     OrderHistory,
     ProductReference,
     ProductLocation,
-    PackingBox
+    PackingBox,
+    OrderLineBoxDistribution
 )
 from src.core.domain.models import (
     OrderListItem, 
@@ -23,7 +24,11 @@ from src.core.domain.models import (
     OrderProductDetail,
     AssignOperatorRequest,
     UpdateOrderStatusRequest,
-    UpdateOrderPriorityRequest
+    UpdateOrderPriorityRequest,
+    StartPickingRequest,
+    OrderPackingDistribution,
+    BoxDistribution,
+    ProductInBox
 )
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -646,6 +651,7 @@ def validate_order_stock(
 @router.post("/{order_id}/start-picking")
 def start_picking_with_box(
     order_id: int,
+    request: StartPickingRequest,
     db: Session = Depends(get_db)
 ):
     """
@@ -667,9 +673,22 @@ def start_picking_with_box(
     - Información de la orden actualizada
     - Información de la caja #1 creada
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        logger.info(f"START-PICKING: Orden {order_id}, codigo_caja: '{request.codigo_caja}'")
+    except Exception as e:
+        logger.error(f"START-PICKING ERROR: No se pudo leer request.codigo_caja: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Body mal formado: {str(e)}"
+        )
+    
     # 1. Validar orden
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
+        logger.error(f"START-PICKING ERROR: Orden {order_id} no encontrada")
         raise HTTPException(
             status_code=404,
             detail=f"Orden con ID {order_id} no encontrada"
@@ -677,27 +696,24 @@ def start_picking_with_box(
     
     # 2. Validar estado
     status = db.query(OrderStatus).filter(OrderStatus.id == order.status_id).first()
-    if status.codigo != "ASSIGNED":
+    logger.info(f"START-PICKING: Orden {order_id} estado: {status.codigo}")
+    if status.codigo != "ASSIGNED" and status.codigo != "IN_PICKING":
+        logger.error(f"START-PICKING ERROR: Estado inválido {status.codigo}")
         raise HTTPException(
             status_code=400,
-            detail=f"Solo se puede iniciar picking desde estado ASSIGNED. Estado actual: {status.codigo}"
+            detail=f"Solo se puede iniciar picking desde estado ASSIGNED o IN_PICKING. Estado actual: {status.codigo}"
         )
     
     # 3. Validar operario asignado
+    logger.info(f"START-PICKING: Orden {order_id} operario: {order.operator_id}")
     if not order.operator_id:
+        logger.error(f"START-PICKING ERROR: Sin operario asignado")
         raise HTTPException(
             status_code=400,
             detail="La orden debe tener un operario asignado antes de iniciar picking"
         )
     
-    # 4. Validar que no tenga caja activa
-    if order.caja_activa_id:
-        raise HTTPException(
-            status_code=400,
-            detail=f"La orden ya tiene una caja activa (ID: {order.caja_activa_id})"
-        )
-    
-    # 5. Cambiar estado a IN_PICKING
+    # 4. Cambiar estado a IN_PICKING (si no lo está ya)
     in_picking_status = db.query(OrderStatus).filter(OrderStatus.codigo == "IN_PICKING").first()
     if not in_picking_status:
         raise HTTPException(
@@ -706,79 +722,172 @@ def start_picking_with_box(
         )
     
     old_status_id = order.status_id
-    order.status_id = in_picking_status.id
-    order.fecha_inicio_picking = datetime.utcnow()
+    if order.status_id != in_picking_status.id:
+        order.status_id = in_picking_status.id
+        order.fecha_inicio_picking = datetime.utcnow()
     
-    # 6. Crear primera caja
-    codigo_caja = f"ORD-{order.numero_orden}-BOX-001"
+    # 5. Validar y procesar código de caja escaneado
+    codigo_caja = request.codigo_caja
+    logger.info(f"START-PICKING: Buscando caja con código '{codigo_caja}'")
     
-    first_box = PackingBox(
-        order_id=order_id,
-        numero_caja=1,
-        codigo_caja=codigo_caja,
-        estado="OPEN",
-        operator_id=order.operator_id,
-        total_items=0,
-        fecha_apertura=datetime.utcnow(),
-        notas="Caja inicial creada automáticamente al iniciar picking"
-    )
+    # Validar si ya tiene una caja activa OPEN
+    if order.caja_activa_id:
+        current_active_box = db.query(PackingBox).filter(PackingBox.id == order.caja_activa_id).first()
+        if current_active_box and current_active_box.estado == "OPEN":
+            # Verificar si está intentando escanear la misma caja (retomar picking)
+            if current_active_box.codigo_caja == codigo_caja:
+                logger.info(f"START-PICKING: Retomando picking con la misma caja activa {order.caja_activa_id}")
+                # Retornar directamente - ya está todo configurado
+                total_cajas = db.query(PackingBox).filter(PackingBox.order_id == order_id).count()
+                return {
+                    "success": True,
+                    "message": "Retomando picking con caja activa",
+                    "order": {
+                        "id": order.id,
+                        "numero_orden": order.numero_orden,
+                        "status": in_picking_status.nombre,
+                        "fecha_inicio_picking": order.fecha_inicio_picking.isoformat() if order.fecha_inicio_picking else None,
+                        "total_cajas": total_cajas
+                    },
+                    "caja": {
+                        "id": current_active_box.id,
+                        "numero_caja": current_active_box.numero_caja,
+                        "codigo_caja": current_active_box.codigo_caja,
+                        "estado": current_active_box.estado,
+                        "is_new": False
+                    }
+                }
+            else:
+                # Intenta abrir caja diferente sin cerrar la actual
+                logger.error(f"START-PICKING ERROR: Intenta abrir caja '{codigo_caja}' pero ya tiene caja OPEN '{current_active_box.codigo_caja}'")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"La orden ya tiene una caja abierta (código: {current_active_box.codigo_caja}). Debe cerrarla antes de abrir una nueva."
+                )
+        elif current_active_box and current_active_box.estado == "CLOSED":
+            logger.info(f"START-PICKING: Caja activa {order.caja_activa_id} está cerrada, permitiendo nueva caja")
+            # Permitir continuar para abrir nueva caja
     
-    db.add(first_box)
-    db.flush()  # Para obtener el ID
+    # Buscar caja existente con ese código
+    scanned_box = db.query(PackingBox).filter(
+        PackingBox.codigo_caja == codigo_caja
+    ).first()
+    
+    active_box = None
+    is_new_box = False
+    
+    if scanned_box:
+        # CAJA EXISTE - Validar estado y disponibilidad
+        logger.info(f"START-PICKING: Caja encontrada - ID: {scanned_box.id}, Estado: {scanned_box.estado}, Order: {scanned_box.order_id}")
+        
+        if scanned_box.estado == "CLOSED":
+            logger.error(f"START-PICKING ERROR: Caja '{codigo_caja}' está cerrada")
+            raise HTTPException(
+                status_code=400,
+                detail=f"La caja '{codigo_caja}' está cerrada y no puede ser utilizada"
+            )
+        
+        if scanned_box.order_id and scanned_box.order_id != order_id:
+            logger.error(f"START-PICKING ERROR: Caja '{codigo_caja}' asignada a orden {scanned_box.order_id}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"La caja '{codigo_caja}' ya está asignada a otra orden (ID: {scanned_box.order_id})"
+            )
+        
+        # Caja OPEN y disponible - Asignar a esta orden
+        if not scanned_box.order_id:
+            scanned_box.order_id = order_id
+            scanned_box.operator_id = order.operator_id
+        
+        active_box = scanned_box
+        is_new_box = False
+        logger.info(f"START-PICKING: Usando caja existente {scanned_box.id}")
+        
+    else:
+        # CAJA NO EXISTE - Crear nueva
+        logger.info(f"START-PICKING: Creando nueva caja con código '{codigo_caja}'")
+        
+        # Calcular número de caja para esta orden
+        existing_boxes_count = db.query(PackingBox).filter(
+            PackingBox.order_id == order_id
+        ).count()
+        
+        new_box = PackingBox(
+            order_id=order_id,
+            numero_caja=existing_boxes_count + 1,
+            codigo_caja=codigo_caja,
+            estado="OPEN",
+            operator_id=order.operator_id,
+            total_items=0,
+            fecha_apertura=datetime.utcnow(),
+            notas="Caja creada al iniciar/continuar picking"
+        )
+        db.add(new_box)
+        db.flush()  # Para obtener el ID
+        
+        active_box = new_box
+        is_new_box = True
+        logger.info(f"START-PICKING: Nueva caja creada - ID: {new_box.id}")
     
     # 7. Actualizar orden con caja activa
-    order.caja_activa_id = first_box.id
-    order.total_cajas = 1
+    order.caja_activa_id = active_box.id
     
-    # 8. Registrar en historial - cambio de estado
-    history_status = OrderHistory(
-        order_id=order_id,
-        status_id=in_picking_status.id,
-        operator_id=order.operator_id,
-        accion="STATUS_CHANGE",
-        status_anterior=old_status_id,
-        status_nuevo=in_picking_status.id,
-        notas=f"Picking iniciado. Estado cambiado a IN_PICKING",
-        fecha=datetime.utcnow()
-    )
-    db.add(history_status)
+    # 8. Registrar en historial - cambio de estado (solo si cambió)
+    if old_status_id != in_picking_status.id:
+        history_status = OrderHistory(
+            order_id=order_id,
+            status_id=in_picking_status.id,
+            operator_id=order.operator_id,
+            accion="STATUS_CHANGE",
+            status_anterior=old_status_id,
+            status_nuevo=in_picking_status.id,
+            notas=f"Picking iniciado. Estado cambiado a IN_PICKING",
+            fecha=datetime.utcnow()
+        )
+        db.add(history_status)
     
-    # 9. Registrar en historial - caja abierta
+    # 9. Registrar en historial - caja asignada
     history_box = OrderHistory(
         order_id=order_id,
         status_id=in_picking_status.id,
         operator_id=order.operator_id,
-        accion="BOX_OPENED",
-        notas=f"Caja #1 creada automáticamente. Código: {codigo_caja}",
+        accion="BOX_OPENED" if is_new_box else "BOX_ASSIGNED",
+        notas=f"Caja #{active_box.numero_caja} {'creada' if is_new_box else 'asignada'}. Código: {codigo_caja}",
         fecha=datetime.utcnow(),
         event_metadata={
-            "packing_box_id": first_box.id,
-            "numero_caja": 1,
+            "packing_box_id": active_box.id,
+            "numero_caja": active_box.numero_caja,
             "codigo_caja": codigo_caja,
-            "auto_created": True
+            "is_new_box": is_new_box
         }
     )
     db.add(history_box)
     
     db.commit()
     db.refresh(order)
-    db.refresh(first_box)
+    db.refresh(active_box)
+    
+    logger.info(f"START-PICKING SUCCESS: Orden {order_id} con caja '{codigo_caja}' ({'nueva' if is_new_box else 'existente'})")
+    
+    # Calcular total de cajas dinámicamente
+    total_cajas = db.query(PackingBox).filter(PackingBox.order_id == order_id).count()
     
     return {
         "success": True,
-        "message": "Picking iniciado exitosamente",
+        "message": f"Picking {'iniciado' if old_status_id != in_picking_status.id else 'continuado'} exitosamente",
         "order": {
             "id": order.id,
             "numero_orden": order.numero_orden,
             "status": in_picking_status.nombre,
-            "fecha_inicio_picking": order.fecha_inicio_picking.isoformat(),
-            "total_cajas": order.total_cajas
+            "fecha_inicio_picking": order.fecha_inicio_picking.isoformat() if order.fecha_inicio_picking else None,
+            "total_cajas": total_cajas
         },
-        "caja_inicial": {
-            "id": first_box.id,
-            "numero_caja": first_box.numero_caja,
-            "codigo_caja": first_box.codigo_caja,
-            "estado": first_box.estado
+        "caja": {
+            "id": active_box.id,
+            "numero_caja": active_box.numero_caja,
+            "codigo_caja": active_box.codigo_caja,
+            "estado": active_box.estado,
+            "is_new": is_new_box
         }
     }
 
@@ -944,3 +1053,142 @@ def complete_picking_with_boxes(
         "caja_cerrada_automaticamente": closed_box_info,
         "resumen_cajas": boxes_summary
     }
+
+
+# ============================================================================
+# CONSULTA DE DISTRIBUCIÓN DE PRODUCTOS EN CAJAS
+# ============================================================================
+
+@router.get("/{order_id}/packing-distribution", response_model=OrderPackingDistribution)
+def get_order_packing_distribution(
+    order_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Obtiene la orden con la distribución completa de productos en cajas.
+    
+    **Retorna:**
+    - Información general de la orden
+    - Lista de cajas con productos distribuidos
+    - Resumen ejecutivo de empaque
+    
+    **Casos de Uso:**
+    - Ver trazabilidad completa de qué productos están en cada caja
+    - Verificar distribución antes de enviar
+    - Auditoría de empaque
+    - Reporte de cajas para logística
+    """
+    # Obtener orden con cajas
+    order = db.query(Order).options(
+        joinedload(Order.status),
+        joinedload(Order.operator)
+    ).filter(Order.id == order_id).first()
+    
+    if not order:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Orden con ID {order_id} no encontrada"
+        )
+    
+    # Obtener todas las cajas de la orden
+    cajas = db.query(PackingBox).filter(
+        PackingBox.order_id == order_id
+    ).order_by(PackingBox.numero_caja.asc()).all()
+    
+    # Obtener todas las líneas de la orden para cálculos
+    order_lines = db.query(OrderLine).filter(
+        OrderLine.order_id == order_id
+    ).all()
+    
+    total_productos = sum(line.cantidad_solicitada for line in order_lines)
+    productos_empacados = sum(line.cantidad_servida for line in order_lines)
+    productos_pendientes = total_productos - productos_empacados
+    
+    # Construir respuesta de cajas con distribuciones
+    cajas_response = []
+    total_items_empacados = 0
+    productos_distribuidos_set = set()
+    
+    for caja in cajas:
+        # Obtener distribuciones de esta caja
+        distributions = db.query(OrderLineBoxDistribution).options(
+            joinedload(OrderLineBoxDistribution.order_line).joinedload(OrderLine.product_reference)
+        ).filter(
+            OrderLineBoxDistribution.packing_box_id == caja.id
+        ).all()
+        
+        # Construir lista de productos en esta caja
+        productos_en_caja = []
+        for dist in distributions:
+            order_line = dist.order_line
+            product_ref = order_line.product_reference
+            
+            # Calcular porcentaje de esta línea en esta caja
+            porcentaje = (dist.quantity_in_box / order_line.cantidad_solicitada * 100) if order_line.cantidad_solicitada > 0 else 0
+            
+            productos_en_caja.append(ProductInBox(
+                order_line_id=order_line.id,
+                producto_id=order_line.product_reference_id,
+                producto_nombre=product_ref.nombre_producto if product_ref else "Producto desconocido",
+                color=product_ref.nombre_color if product_ref else None,
+                talla=product_ref.talla if product_ref else None,
+                sku=product_ref.sku if product_ref else None,
+                ean=order_line.ean,
+                cantidad_en_caja=dist.quantity_in_box,
+                cantidad_total_solicitada=order_line.cantidad_solicitada,
+                porcentaje_en_caja=round(porcentaje, 2),
+                fecha_empacado=dist.fecha_empacado
+            ))
+            
+            total_items_empacados += dist.quantity_in_box
+            productos_distribuidos_set.add(order_line.id)
+        
+        cajas_response.append(BoxDistribution(
+            id=caja.id,
+            numero_caja=caja.numero_caja,
+            codigo_caja=caja.codigo_caja,
+            estado=caja.estado,
+            total_items=caja.total_items,
+            peso_kg=caja.peso_kg,
+            dimensiones=caja.dimensiones,
+            fecha_apertura=caja.fecha_apertura,
+            fecha_cierre=caja.fecha_cierre,
+            productos=productos_en_caja
+        ))
+    
+    # Construir información de la orden
+    order_info = {
+        "id": order.id,
+        "numero_orden": order.numero_orden,
+        "cliente": order.cliente,
+        "nombre_cliente": order.nombre_cliente,
+        "estado": order.status.codigo if order.status else "UNKNOWN",
+        "total_cajas": len(cajas),  # Calcular dinámicamente
+        "caja_activa_id": order.caja_activa_id,
+        "total_productos": total_productos,
+        "productos_empacados": productos_empacados,
+        "productos_pendientes": productos_pendientes,
+        "operario": order.operator.nombre if order.operator else None,
+        "fecha_inicio_picking": order.fecha_inicio_picking.isoformat() if order.fecha_inicio_picking else None,
+        "fecha_fin_picking": order.fecha_fin_picking.isoformat() if order.fecha_fin_picking else None
+    }
+    
+    # Resumen ejecutivo
+    cajas_abiertas = sum(1 for c in cajas if c.estado == "OPEN")
+    cajas_cerradas = sum(1 for c in cajas if c.estado == "CLOSED")
+    
+    resumen = {
+        "total_cajas": len(cajas),
+        "cajas_abiertas": cajas_abiertas,
+        "cajas_cerradas": cajas_cerradas,
+        "total_items_empacados": total_items_empacados,
+        "productos_distribuidos": len(productos_distribuidos_set),
+        "productos_pendientes": len(order_lines) - len(productos_distribuidos_set),
+        "completado": productos_pendientes == 0
+    }
+    
+    return OrderPackingDistribution(
+        order=order_info,
+        cajas=cajas_response,
+        resumen=resumen
+    )

@@ -408,7 +408,7 @@ class PackingBoxResponse(PackingBoxBase):
     fecha_apertura: datetime = Field(description="Cuándo se abrió la caja")
     fecha_cierre: Optional[datetime] = Field(None, description="Cuándo se cerró la caja")
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
 
 class PackingBoxWithOperator(PackingBoxResponse):
@@ -430,6 +430,52 @@ class PackItemRequest(BaseModel):
 class UnpackItemRequest(BaseModel):
     """Modelo para solicitud de desempacar un item de una caja."""
     order_line_id: int = Field(description="ID de la línea de orden a desempacar")
+
+
+class StartPickingRequest(BaseModel):
+    """Modelo para solicitud de inicio de picking con código de caja."""
+    codigo_caja: str = Field(
+        ..., 
+        min_length=3,
+        max_length=100,
+        description="Código de barras de la caja escaneado por el operario"
+    )
+
+
+class ProductInBox(BaseModel):
+    """Producto distribuido en una caja específica."""
+    order_line_id: int
+    producto_id: Optional[int]
+    producto_nombre: str
+    color: Optional[str]
+    talla: Optional[str]
+    sku: Optional[str]
+    ean: Optional[str]
+    cantidad_en_caja: int
+    cantidad_total_solicitada: int
+    porcentaje_en_caja: float
+    fecha_empacado: Optional[datetime]
+
+
+class BoxDistribution(BaseModel):
+    """Distribución de productos en una caja."""
+    id: int
+    numero_caja: int
+    codigo_caja: str
+    estado: str
+    total_items: int
+    peso_kg: Optional[float]
+    dimensiones: Optional[str]
+    fecha_apertura: datetime
+    fecha_cierre: Optional[datetime]
+    productos: List[ProductInBox]
+
+
+class OrderPackingDistribution(BaseModel):
+    """Respuesta completa con orden y distribución en cajas."""
+    order: Dict[str, Any]
+    cajas: List[BoxDistribution]
+    resumen: Dict[str, Any]
 
 
 # ============================================================================
