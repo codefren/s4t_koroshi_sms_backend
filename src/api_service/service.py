@@ -771,14 +771,6 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
             product = db.query(ProductReference).filter(ProductReference.sku == item.sku).first()
             
             lineas_espanol.append({
-                "articuloId": str(product.id) if product else "",
-                "colorId": product.color_id if product else "",
-                "cantidades": {
-                    "additionalProp1": 0,
-                    "additionalProp2": 0,
-                    "additionalProp3": 0
-                },
-                "ean": "",
                 "sku": item.sku,
                 "cantidad": item.quantity
             })
