@@ -679,7 +679,7 @@ def batch_update_order(
                 "ordenServicioId": order.numero_orden,
                 "operarioId": "000001",
                 "generarTraspaso": True,
-                "tipoOperacionStockTraspaso": "SOLO_ENTRADAS",
+                "tipoOperacionStockTraspaso": 1,
                 "lineas": external_lines
             }
             
