@@ -670,6 +670,14 @@ def batch_update_order(
                                 "matricula": packing_box.codigo_caja,
                                 "cantidad": dist.quantity_in_box
                             })
+                else:
+                    # No box distribution - add line without matricula
+                    if order_line.cantidad_servida > 0:
+                        external_lines.append({
+                            "sku": order_line.product_reference.sku,
+                            "matricula": "",
+                            "cantidad": order_line.cantidad_servida
+                        })
             
             # 8.2 Build external API payload
             external_payload = {
