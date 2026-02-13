@@ -707,7 +707,7 @@ def batch_update_order(
                     "Content-Type": "application/json",
                     "X-API-Key": EXTERNAL_API_KEY
                 },
-                timeout=10
+                timeout=120
             )
             
             # 8.6 Log response from external API
@@ -806,7 +806,7 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
                 "Content-Type": "application/json",
                 "X-API-Key": EXTERNAL_API_KEY
             },
-            timeout=10
+            timeout=120
         )
         
         # Step 4: Log response from external API
