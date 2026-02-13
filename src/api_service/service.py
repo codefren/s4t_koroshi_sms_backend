@@ -677,6 +677,8 @@ def batch_update_order(
                 "almacenId": order.almacen.codigo if order.almacen else "00000001",
                 "clienteId": order.cliente,
                 "ordenServicioId": order.numero_orden,
+                "pedidoId": order.numero_pedido,
+                "pedidoEmpresa": "0001",
                 "operarioId": "000001",
                 "generarTraspaso": True,
                 "tipoOperacionStockTraspaso": 5,
