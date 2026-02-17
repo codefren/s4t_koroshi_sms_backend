@@ -636,116 +636,112 @@ def batch_update_order(
     # Flush changes to DB before counting
     db.flush()
 
-    ready_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'READY').first()
-    if ready_status:
-        order.status_id = ready_status.id
-        order_status_code = 'READY'
+
 
     # 7. Mark order as updated (first and only time) - blocks further updates
     order.fecha_fin_picking = datetime.now(timezone.utc)
     
     # 8. If order is READY, send to external Packing API
-    if order_status_code == 'READY':
+    external_api_response = None
+
+    try:
+        # 8.1 Build lines with box distribution - ONLY for items in current request
+        external_lines = []
+        
+        # Iterate only over SKUs that came in the current request
+        for sku in sku_quantities.keys():
+            # Find the order line for this SKU
+            order_line = db.query(OrderLine).join(ProductReference).filter(
+                OrderLine.order_id == order.id,
+                ProductReference.sku == sku
+            ).first()
+            
+            if not order_line:
+                continue
+            
+            # Check if this SKU has box distributions in the current request
+            box_distributions = sku_box_distributions.get(sku, [])
+            
+            if box_distributions:
+                # Add one entry per box distribution from the request
+                for dist in box_distributions:
+                    external_lines.append({
+                        "sku": sku,
+                        "matricula": dist['box_code'],
+                        "cantidad": dist['quantity']
+                    })
+            else:
+                # No box distribution - add line without matricula using the quantity from request
+                quantity = sku_quantities.get(sku, 0)
+                if quantity > 0:
+                    external_lines.append({
+                        "sku": sku,
+                        "matricula": "",
+                        "cantidad": quantity
+                    })
+        
+        # 8.2 Build external API payload
+        external_payload = {
+            "empresaId": "0001",
+            "almacenId": order.almacen.codigo if order.almacen else "00000001",
+            "clienteId": order.cliente,
+            "ordenServicioId": order.numero_orden,
+            "pedidoId": order.numero_pedido,
+            "pedidoEmpresa": "0001",
+            "operarioId": "000001",
+            "generarTraspaso": True,
+            "tipoOperacionStockTraspaso": 5,
+            "lineas": external_lines
+        }
+        
+        # 8.3 Log request to external API
+        logger.info("Sending packing request to external API")
+        logger.info(f"URL: http://localhost:5053/api/Packing")
+        logger.info(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
+        
+        # 8.4 Send POST to external Packing API
+        external_api_url = "http://localhost:5053/api/Packing"
+        response = requests.post(
+            external_api_url,
+            json=external_payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-API-Key": EXTERNAL_API_KEY
+            },
+            timeout=120
+        )
+        
+        # 8.6 Log response from external API
+        logger.info(f"External Packing API response - Status: {response.status_code}")
+        logger.info(f"Response Body: {response.text}")
+        
+        # 8.7 Parse external API response
         try:
-            # 8.1 Build lines with box distribution
-            external_lines = []
-            
-            # Get all order lines with their box distributions
-            for order_line in db.query(OrderLine).filter(OrderLine.order_id == order.id).all():
-                # Get box distributions for this line
-                distributions = db.query(OrderLineBoxDistribution).filter(
-                    OrderLineBoxDistribution.order_line_id == order_line.id
-                ).all()
-                
-                if distributions:
-                    # Add one entry per box distribution
-                    for dist in distributions:
-                        packing_box = db.query(PackingBox).filter(
-                            PackingBox.id == dist.packing_box_id
-                        ).first()
-                        
-                        if packing_box and dist.quantity_in_box > 0:
-                            external_lines.append({
-                                "sku": order_line.product_reference.sku,
-                                "matricula": packing_box.codigo_caja,
-                                "cantidad": dist.quantity_in_box
-                            })
-                else:
-                    # No box distribution - add line without matricula
-                    if order_line.cantidad_servida > 0:
-                        external_lines.append({
-                            "sku": order_line.product_reference.sku,
-                            "matricula": "",
-                            "cantidad": order_line.cantidad_servida
-                        })
-            
-            # 8.2 Build external API payload
-            external_payload = {
-                "empresaId": "0001",
-                "almacenId": order.almacen.codigo if order.almacen else "00000001",
-                "clienteId": order.cliente,
-                "ordenServicioId": order.numero_orden,
-                "pedidoId": order.numero_pedido,
-                "pedidoEmpresa": "0001",
-                "operarioId": "000001",
-                "generarTraspaso": True,
-                "tipoOperacionStockTraspaso": 5,
-                "lineas": external_lines
-            }
-            
-            # 8.3 Log request to external API
-            logger.info("Sending packing request to external API")
-            logger.info(f"URL: http://localhost:5053/api/Packing")
-            logger.info(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
-            
-            # 8.4 Send POST to external Packing API
-            external_api_url = "http://localhost:5053/api/Packing"
-            response = requests.post(
-                external_api_url,
-                json=external_payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-API-Key": EXTERNAL_API_KEY
-                },
-                timeout=120
-            )
-            
-            # 8.6 Log response from external API
-            logger.info(f"External Packing API response - Status: {response.status_code}")
-            logger.info(f"Response Body: {response.text}")
-            
-            # 8.7 Check response status
-            if response.status_code != 201:
-                db.rollback()
-                error_detail = f"External Packing API returned {response.status_code}: {response.text}"
-                logger.error(f"External Packing API error: {error_detail}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Error al registrar packing en sistema externo: {error_detail}"
-                )
-            
-            logger.info("External Packing API returned 201 - Success!")
-            
-        except requests.exceptions.RequestException as e:
+            external_api_response = response.json()
+        except json.JSONDecodeError:
+            external_api_response = {"raw_response": response.text}
+        
+        # 8.8 Check response status and commit/rollback accordingly
+        if response.status_code != 201:
             db.rollback()
-            error_msg = f"Error conectando con API externo de Packing: {str(e)}"
-            logger.error(f"Network error: {error_msg}")
-            raise HTTPException(status_code=400, detail=error_msg)
-        except HTTPException:
-            raise
-    
-    db.commit()
-    
-    return BatchUpdateOrderResponse(
-        status="success",
-        message=f"Updated {len(lines_updates)} lines for order {order_number}",
-        order_number=order_number,
-        order_status=order_status_code,
-        lines_updated=len(lines_updates),
-        lines_completed=lines_completed,
-        lines_partial=lines_partial,
-        lines_pending=lines_pending
-    )
+            logger.error(f"External Packing API returned {response.status_code}")
+        else:
+            ready_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'READY').first()
+            if ready_status:
+                order.status_id = ready_status.id
+            logger.info("External Packing API returned 201 - Success!")
+            db.commit()
+        
+        # Always return external API response
+        logger.info(f"External Packing API response: {external_api_response}")
+        return external_api_response
+        
+    except requests.exceptions.RequestException as e:
+        db.rollback()
+        error_msg = f"Error conectando con API externo de Packing: {str(e)}"
+        logger.error(f"Network error: {error_msg}")
+        return {"status": False, "error": error_msg}
+
 
 
 def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockResponse:
