@@ -53,18 +53,21 @@ WS /ws/operators/{codigo_operario}
 1. GET /operators/OP001/orders
    → [ORD1001, ORD1002]
 
-2. POST /api/v1/orders/123/start-picking
+2. Operario escanea código de caja física (ej: CAJA-001)
+
+3. POST /api/v1/orders/123/start-picking
+   Body: {"codigo_caja": "CAJA-001"}
    → Estado: IN_PICKING ✓
-   → Caja #1 creada automáticamente (ORD-123-BOX-001) ✓
+   → Caja #1 creada con código escaneado ✓
    → Caja activa: Caja #1
 
-3. GET /operators/OP001/orders/123/lines
+4. GET /operators/OP001/orders/123/lines
    → 15 productos para recoger
 
-4. WS Connect ws://localhost:8000/ws/operators/OP001
+5. WS Connect ws://localhost:8000/ws/operators/OP001
    → Conectado ✓
 
-5. LOOP: Para cada producto (escanear hasta completar):
+6. LOOP: Para cada producto (escanear hasta completar):
    
    Operario escanea → PDA envía:
    {
@@ -94,8 +97,9 @@ WS /ws/operators/{codigo_operario}
    }
    
    ✅ Item automáticamente empacado en Caja #1
+   ✅ Registrado en order_line_box_distribution (quantity_in_box +1)
 
-6. [OPCIONAL] Si la Caja #1 se llena:
+7. [OPCIONAL] Si la Caja #1 se llena:
    
    PUT /api/v1/packing-boxes/{box_id}/close
    Body: {"peso_kg": 5.5, "dimensiones": "40x30x20"}
@@ -105,9 +109,9 @@ WS /ws/operators/{codigo_operario}
    → Caja #2 abierta (ORD-123-BOX-002) ✓
    → Caja activa: Caja #2
    
-   Continuar escaneando → Items se empaquetan en Caja #2
+   Escanear código nueva caja → Continuar escaneando → Items se empaquetan en Caja #2
 
-7. POST /api/v1/orders/123/complete-picking
+8. POST /api/v1/orders/123/complete-picking
    → Estado: PICKED ✓
    → Caja activa cerrada automáticamente ✓
    → Total cajas: 2 ✓
@@ -178,8 +182,9 @@ escanearProducto(123, '8445962763983', 'A-IZQ-12-H2');
 **Efectos automáticos:**
 1. Incrementa `cantidad_servida` en +1 para ese EAN
 2. 🎁 **NUEVO:** Empaca automáticamente el item en la caja activa
-3. Actualiza `total_items` de la caja
-4. Registra `fecha_empacado` del item
+3. 📦 Registra en `order_line_box_distribution` (quantity_in_box +1)
+4. Actualiza `total_items` de la caja
+5. Registra `fecha_empacado` del item cuando se completa la línea
 
 ---
 
@@ -600,11 +605,12 @@ Sistema automático de gestión de cajas físicas durante el proceso de picking.
    - Registra total de cajas utilizadas
 
 ### Ventajas
-- 📦 **Trazabilidad:** Cada item sabe en qué caja está
-- 📊 **Estadísticas:** Peso y dimensiones por caja
-- 🔍 **Códigos escaneables:** Cada caja tiene código único
+- 📦 **Trazabilidad completa:** Cada item sabe cuántas unidades están en qué caja específica
+- 📊 **Distribución multi-caja:** Un producto puede estar en múltiples cajas con cantidades específicas
+- 🔍 **Códigos escaneables:** Cada caja tiene código único escaneado por el operario
 - ⚙️ **Automático:** El PDA no necesita gestionar cajas manualmente
 - 📝 **Auditoría:** Historial completo de apertura/cierre
+- 🎯 **Tabla order_line_box_distribution:** Registro granular de cantidades por caja
 
 ### Reglas
 - ⚠️ Solo **1 caja OPEN** por orden a la vez
@@ -613,6 +619,10 @@ Sistema automático de gestión de cajas físicas durante el proceso de picking.
 
 ### Endpoints Principales
 ```javascript
+// Iniciar picking con código de caja escaneado
+POST /api/v1/orders/123/start-picking
+Body: {"codigo_caja": "CAJA-001"}  // Código escaneado por operario
+
 // Abrir nueva caja manualmente (si la actual se llenó)
 POST /api/v1/packing-boxes/orders/123/boxes
 Body: {"notas": "Caja para items grandes"}
