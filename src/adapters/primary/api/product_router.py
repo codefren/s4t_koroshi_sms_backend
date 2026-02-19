@@ -304,6 +304,7 @@ def list_products(
 @router.get("/{product_id}", response_model=ProductDetail)
 def get_product(
     product_id: int,
+    almacen_id: Optional[int] = Query(None, description="Filtrar ubicaciones por almacén"),
     db: Session = Depends(get_db)
 ):
     """
@@ -311,8 +312,8 @@ def get_product(
     
     **Incluye:**
     - Toda la información del producto
-    - Todas las ubicaciones (sin límite)
-    - Stock total calculado
+    - Todas las ubicaciones (filtradas por almacén si se especifica)
+    - Stock total calculado (del almacén especificado)
     - Estado calculado
     """
     product = db.query(ProductReference).options(
@@ -322,14 +323,14 @@ def get_product(
     if not product:
         raise HTTPException(status_code=404, detail=f"Producto con ID {product_id} no encontrado")
     
-    # Calcular stock total
-    stock = _calculate_total_stock(product)
+    # Calcular stock total (filtrado por almacén si se especifica)
+    stock = _calculate_total_stock(product, almacen_id=almacen_id)
     status_text, status_class = calculate_product_status(stock)
     
-    # Formatear ubicaciones detalladas
+    # Formatear ubicaciones detalladas (filtradas por almacén si se especifica)
     location_details = []
     for loc in product.locations:
-        if loc.activa:
+        if loc.activa and (almacen_id is None or loc.almacen_id == almacen_id):
             location_details.append(ProductLocationDetail(
                 id=loc.id,
                 code=format_location_code(loc.pasillo, loc.lado, loc.ubicacion, loc.altura),
@@ -350,10 +351,9 @@ def get_product(
         nombre_producto=product.nombre_producto,
         name=product.nombre_producto,
         color_id=product.color_id,
-        descripcion_color=product.color,
-        category=product.color,
+        descripcion_color=product.nombre_color,
+        category=product.temporada,
         talla=product.talla,
-        ean=product.ean,
         temporada=product.temporada,
         activo=product.activo,
         stock=stock,
@@ -366,6 +366,7 @@ def get_product(
 @router.get("/{product_id}/locations", response_model=ProductLocationsResponse)
 def get_product_locations(
     product_id: int,
+    almacen_id: Optional[int] = Query(None, description="Filtrar ubicaciones por almacén"),
     include_inactive: bool = Query(
         False,
         description="Incluir ubicaciones inactivas"
@@ -376,13 +377,14 @@ def get_product_locations(
     Obtiene todas las ubicaciones de un producto específico.
     
     **Respuesta detallada:**
-    - Lista completa de ubicaciones (sin límite)
+    - Lista completa de ubicaciones (filtradas por almacén si se especifica)
     - Stock por ubicación
     - Prioridad de cada ubicación
-    - Stock total sumado
+    - Stock total sumado (del almacén especificado)
     - Estado del producto
     
     **Parámetros:**
+    - `almacen_id`: Filtrar por almacén específico
     - `include_inactive`: Si es true, incluye ubicaciones inactivas
     """
     product = db.query(ProductReference).options(
@@ -392,8 +394,14 @@ def get_product_locations(
     if not product:
         raise HTTPException(status_code=404, detail=f"Producto con ID {product_id} no encontrado")
     
-    # Filtrar ubicaciones según parámetro
+    # Filtrar ubicaciones según parámetros
     locations = product.locations
+    
+    # Filtrar por almacén si se especifica
+    if almacen_id is not None:
+        locations = [loc for loc in locations if loc.almacen_id == almacen_id]
+    
+    # Filtrar por estado activo
     if not include_inactive:
         locations = [loc for loc in locations if loc.activa]
     

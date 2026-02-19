@@ -134,6 +134,7 @@ class BatchUpdateOrderResponse(BaseModel):
     lines_completed: int
     lines_partial: int
     lines_pending: int
+    external_api_data: Optional[dict] = Field(None, description="Response data from external Packing API when order is READY")
 
 
 # ============================================================================

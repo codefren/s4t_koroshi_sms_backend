@@ -120,7 +120,7 @@ class ProductDetail(BaseModel):
     color_id: str
     descripcion_color: Optional[str] = Field(None, alias="category")
     talla: str
-    ean: Optional[str]
+    ean: Optional[str] = None
     temporada: Optional[str]
     
     # Estado
