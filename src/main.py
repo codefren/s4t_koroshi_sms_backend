@@ -25,11 +25,17 @@ from src.api_service.routes import router as api_service_router
 
 from contextlib import asynccontextmanager
 from src.core.logging_config import setup_logging
+from src.services.replenishment_cron_service import start_replenishment_scheduler
+from src.services.stock_reservation_cron_service import start_stock_reservation_scheduler
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
+    replenishment_scheduler = start_replenishment_scheduler()
+    stock_scheduler = start_stock_reservation_scheduler()
     yield
+    replenishment_scheduler.shutdown()
+    stock_scheduler.shutdown()
 
 app = FastAPI(title="FastAPI Hexagonal ODBC", lifespan=lifespan)
 
@@ -48,6 +54,8 @@ app.add_middleware(
         "http://192.168.1.14:19006",  # Expo web
         "http://172.20.10.9:8000",  # API Backend
         "http://172.20.10.9:8081",  # Cliente PDA
+        "http://192.168.1.13:8081",  # PDA LAN
+        "http://192.168.1.13:19000",  # Expo Metro bundler LAN
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
