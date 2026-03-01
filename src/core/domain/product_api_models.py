@@ -121,6 +121,7 @@ class ProductDetail(BaseModel):
     descripcion_color: Optional[str] = Field(None, alias="category")
     talla: str
     ean: Optional[str] = None
+    eans: List[str] = Field(default=[], description="Lista de códigos EAN asociados al producto")
     temporada: Optional[str]
     
     # Estado
