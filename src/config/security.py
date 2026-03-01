@@ -53,6 +53,8 @@ def get_security_config() -> SecurityConfig:
             "http://192.168.1.14:19006",  # Expo web
             "http://172.20.10.9:8000",  # API Backend
             "http://172.20.10.9:8081",  # Cliente PDA
+            "http://192.168.1.13:8081",  # PDA LAN
+            "http://192.168.1.13:19000",  # Expo Metro bundler LAN
         ],
         cors_allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         cors_allow_headers=["*"],
@@ -115,6 +117,7 @@ def get_security_config() -> SecurityConfig:
             "::1",            # IPv6 localhost
             "127.0.0.0/8",    # IPv4 localhost range
             "172.20.10.9",    # Cliente PDA
+            "192.168.1.0/24", # LAN completa
         ],
         
         # === IP BLACKLISTING (Optional) ===

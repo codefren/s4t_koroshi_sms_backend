@@ -167,6 +167,8 @@ class OrderLineResponse(OrderLineBase):
     """Modelo de respuesta para línea de orden."""
     id: int
     order_id: int
+    product_location_id: Optional[int] = Field(None, description="ID de la ubicación de picking asignada")
+    stock_reserved: bool = Field(default=False, description="Si el stock está reservado para esta línea")
     packing_box_id: Optional[int] = Field(None, description="ID de la caja donde está empacado este item")
     fecha_empacado: Optional[datetime] = Field(None, description="Cuándo se empacó este item")
     created_at: datetime
@@ -266,6 +268,8 @@ class OrderProductDetail(BaseModel):
     cantidad_solicitada: int = Field(description="Cantidad pedida")
     cantidad_servida: int = Field(description="Cantidad recogida")
     estado: str = Field(description="Estado de la línea (PENDING, PARTIAL, COMPLETED)")
+    stock_reserved: bool = Field(default=False, description="Si el stock está reservado")
+    product_location_id: Optional[int] = Field(None, description="ID ubicación de picking asignada")
 
 
 class OrderDetailFull(BaseModel):
@@ -577,6 +581,11 @@ class ProductLocationBase(BaseModel):
         ge=0,
         description="Stock actual en esta ubicación"
     )
+    stock_reservado: int = Field(
+        default=0,
+        ge=0,
+        description="Stock reservado por órdenes pendientes"
+    )
     prioridad: int = Field(
         default=3, 
         ge=1, 
@@ -612,6 +621,10 @@ class ProductLocationResponse(ProductLocationBase):
     codigo_ubicacion: str = Field(
         ...,
         description="Código de ubicación generado automáticamente (propiedad computada)"
+    )
+    stock_disponible: int = Field(
+        default=0,
+        description="Stock disponible para nuevas reservas (stock_actual - stock_reservado)"
     )
     created_at: datetime
     updated_at: datetime
