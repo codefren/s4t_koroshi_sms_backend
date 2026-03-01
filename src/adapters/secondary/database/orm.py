@@ -502,6 +502,12 @@ class OrderLine(Base):
     # COMPLETED: Se recogió todo (cantidad_servida == cantidad_solicitada)
     estado = Column(String(20), default='PENDING', nullable=False, index=True)
     
+    # === RESERVA DE STOCK ===
+    # Indica si esta línea ya tiene stock reservado en la ubicación de picking
+    # True = stock_reservado incrementado en ProductLocation
+    # False = sin reserva (pendiente o ya consumida)
+    stock_reserved = Column(Boolean, default=False, nullable=False)
+    
     # Timestamp de cuando el customer B2B visualizó esta línea de orden por primera vez
     # Se registra solo en la primera consulta a través del API B2B
     # NULL = Nunca vista por el customer
@@ -894,6 +900,10 @@ class ProductLocation(Base):
     # Puede actualizarse con sistema de inventario
     stock_actual = Column(Integer, default=0, nullable=True)
     
+    # Stock reservado por órdenes pendientes (PENDING/ASSIGNED/IN_PICKING)
+    # stock_disponible = stock_actual - stock_reservado
+    stock_reservado = Column(Integer, default=0, nullable=False)
+    
     # === INFORMACIÓN ADICIONAL ===
     
     # Prioridad de esta ubicación para picking (1=alta, 5=baja)
@@ -952,6 +962,13 @@ class ProductLocation(Base):
         return "-".join(parts) if parts else "SIN-UBICACION"
     
     @property
+    def stock_disponible(self):
+        """Stock disponible para nuevas reservas (actual - reservado)"""
+        actual = self.stock_actual or 0
+        reservado = self.stock_reservado or 0
+        return actual - reservado
+    
+    @property
     def alerta_stock_bajo(self):
         """Indica si el stock está por debajo del mínimo"""
         if self.stock_actual is None or self.stock_minimo is None:
@@ -983,6 +1000,7 @@ class ReplenishmentRequest(Base):
     
     product_id = Column(Integer, ForeignKey("product_references.id", ondelete="NO ACTION"), nullable=False, index=True)
     requested_quantity = Column(Integer, nullable=False)
+    actual_quantity = Column(Integer, nullable=True)
     
     # WAITING_STOCK, READY, IN_PROGRESS, COMPLETED, REJECTED
     status = Column(String(20), nullable=False, default="WAITING_STOCK", index=True)
@@ -1120,3 +1138,79 @@ class APIMatricula(Base):
     
     def __repr__(self):
         return f"<APIMatricula box_number={self.box_number} status={self.status}>"
+
+
+class StockMovement(Base):
+    """
+    Registro de auditoría de movimientos de stock por órdenes.
+    
+    Tipos de movimiento:
+    - RESERVE: Stock reservado por orden (PENDING/ASSIGNED/IN_PICKING)
+    - DEDUCT: Stock descontado al pasar orden a READY (cantidad_servida)
+    - RELEASE: Reserva liberada por cancelación de orden
+    - ADJUSTMENT: Ajuste manual de stock
+    - MOVE_OUT: Stock movido desde esta ubicación a otra
+    - MOVE_IN: Stock recibido en esta ubicación desde otra
+    """
+    __tablename__ = "stock_movements"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # Ubicación afectada
+    product_location_id = Column(
+        Integer,
+        ForeignKey("product_locations.id", ondelete="NO ACTION"),
+        nullable=False,
+        index=True
+    )
+    
+    # Producto afectado
+    product_id = Column(
+        Integer,
+        ForeignKey("product_references.id", ondelete="NO ACTION"),
+        nullable=False,
+        index=True
+    )
+    
+    # Orden relacionada (NULL para ajustes manuales)
+    order_id = Column(
+        Integer,
+        ForeignKey("orders.id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True
+    )
+    
+    # Línea de orden específica
+    order_line_id = Column(
+        Integer,
+        ForeignKey("order_lines.id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True
+    )
+    
+    # RESERVE, DEDUCT, RELEASE, ADJUSTMENT
+    tipo = Column(String(30), nullable=False, index=True)
+    
+    # Cantidad del movimiento (positivo o negativo)
+    cantidad = Column(Integer, nullable=False)
+    
+    # Snapshots de stock antes y después del movimiento
+    stock_antes = Column(Integer, nullable=False)
+    stock_despues = Column(Integer, nullable=False)
+    
+    notas = Column(Text, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    # Relationships
+    product_location = relationship("ProductLocation", backref="stock_movements")
+    product = relationship("ProductReference", backref="stock_movement_records")
+    order = relationship("Order", backref="stock_movements")
+    order_line = relationship("OrderLine", backref="stock_movements")
+    
+    __table_args__ = (
+        Index('idx_stock_mov_tipo_created', 'tipo', 'created_at'),
+    )
+    
+    def __repr__(self):
+        return f"<StockMovement {self.id} {self.tipo} qty={self.cantidad} loc={self.product_location_id}>"
