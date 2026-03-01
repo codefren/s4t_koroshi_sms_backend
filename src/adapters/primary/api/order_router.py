@@ -18,6 +18,10 @@ from src.adapters.secondary.database.orm import (
     PackingBox,
     OrderLineBoxDistribution
 )
+from src.services.stock_reservation_cron_service import (
+    deduct_stock_for_order,
+    release_stock_for_order,
+)
 from src.core.domain.models import (
     OrderListItem, 
     OrderDetailFull, 
@@ -183,7 +187,9 @@ def get_order_detail(
             ean=line.ean,  # Se mantiene en OrderLine para match rápido
             cantidad_solicitada=line.cantidad_solicitada,
             cantidad_servida=line.cantidad_servida,
-            estado=line.estado
+            estado=line.estado,
+            stock_reserved=line.stock_reserved,
+            product_location_id=line.product_location_id
         )
         productos.append(producto)
     
@@ -371,8 +377,27 @@ def update_order_status(
     elif request.estado_codigo.upper() == "PICKED" and not order.fecha_fin_picking:
         order.fecha_fin_picking = now
     
+    # === GESTIÓN DE STOCK ===
+    stock_metadata = {}
+    nuevo_codigo = request.estado_codigo.upper()
+    
+    if nuevo_codigo == "CANCELLED":
+        # Solo liberar stock_reservado (no se recogió nada)
+        releases = release_stock_for_order(order, db)
+        stock_metadata["stock_releases"] = releases
+        stock_metadata["total_released"] = sum(d["cantidad_liberada"] for d in releases)
+    
     # Crear entrada en historial
     notas_historial = request.notas or f"Estado cambiado de {old_status.nombre if old_status else 'N/A'} a {new_status.nombre}"
+    
+    event_meta = {
+        "status_anterior_codigo": old_status.codigo if old_status else None,
+        "status_nuevo_codigo": new_status.codigo,
+        "status_anterior_nombre": old_status.nombre if old_status else None,
+        "status_nuevo_nombre": new_status.nombre
+    }
+    if stock_metadata:
+        event_meta["stock"] = stock_metadata
     
     history = OrderHistory(
         order_id=order.id,
@@ -383,12 +408,7 @@ def update_order_status(
         status_nuevo=new_status.id,
         notas=notas_historial,
         fecha=now,
-        event_metadata={
-            "status_anterior_codigo": old_status.codigo if old_status else None,
-            "status_nuevo_codigo": new_status.codigo,
-            "status_anterior_nombre": old_status.nombre if old_status else None,
-            "status_nuevo_nombre": new_status.nombre
-        }
+        event_metadata=event_meta
     )
     db.add(history)
     
@@ -936,19 +956,6 @@ def complete_picking_with_boxes(
             detail=f"Solo se puede completar picking desde estado IN_PICKING. Estado actual: {status.codigo}"
         )
     
-    # 3. Validar que todos los items estén empacados
-    unpacked_items = [
-        line for line in order.order_lines 
-        if line.packing_box_id is None
-    ]
-    
-    if unpacked_items:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No se puede completar picking. {len(unpacked_items)} items sin empacar. "
-                   f"Todos los items deben estar en una caja antes de completar."
-        )
-    
     # 4. Validar que exista al menos una caja
     boxes_count = db.query(PackingBox).filter(PackingBox.order_id == order_id).count()
     if boxes_count == 0:
@@ -1004,7 +1011,14 @@ def complete_picking_with_boxes(
     order.status_id = picked_status.id
     order.fecha_fin_picking = datetime.utcnow()
     
-    # 7. Registrar en historial - cambio de estado
+    # 7. Descontar stock_actual y liberar stock_reservado
+    deductions = deduct_stock_for_order(order, db)
+    
+    # 8. Obtener resumen de cajas (antes del commit para usar en historial)
+    all_boxes = db.query(PackingBox).filter(PackingBox.order_id == order_id).all()
+    total_cajas = len(all_boxes)
+    
+    # 9. Registrar en historial - cambio de estado
     history_status = OrderHistory(
         order_id=order_id,
         status_id=picked_status.id,
@@ -1012,21 +1026,20 @@ def complete_picking_with_boxes(
         accion="PICKING_COMPLETED",
         status_anterior=old_status_id,
         status_nuevo=picked_status.id,
-        notas=f"Picking completado. {order.total_cajas} cajas creadas.",
+        notas=f"Picking completado. {total_cajas} cajas creadas.",
         fecha=datetime.utcnow(),
         event_metadata={
-            "total_cajas": order.total_cajas,
+            "total_cajas": total_cajas,
             "total_items": order.total_items,
-            "items_completados": order.items_completados
+            "items_completados": order.items_completados,
+            "stock_deductions": deductions,
+            "total_deducted": sum(d["cantidad_deducida"] for d in deductions)
         }
     )
     db.add(history_status)
     
     db.commit()
     db.refresh(order)
-    
-    # 8. Obtener resumen de cajas
-    all_boxes = db.query(PackingBox).filter(PackingBox.order_id == order_id).all()
     boxes_summary = [
         {
             "numero_caja": box.numero_caja,
@@ -1046,12 +1059,17 @@ def complete_picking_with_boxes(
             "status": picked_status.nombre,
             "fecha_inicio_picking": order.fecha_inicio_picking.isoformat() if order.fecha_inicio_picking else None,
             "fecha_fin_picking": order.fecha_fin_picking.isoformat(),
-            "total_cajas": order.total_cajas,
+            "total_cajas": total_cajas,
             "total_items": order.total_items,
             "items_completados": order.items_completados
         },
         "caja_cerrada_automaticamente": closed_box_info,
-        "resumen_cajas": boxes_summary
+        "resumen_cajas": boxes_summary,
+        "stock_deductions": {
+            "total_lines_deducted": len(deductions),
+            "total_quantity_deducted": sum(d["cantidad_deducida"] for d in deductions),
+            "details": deductions
+        }
     }
 
 

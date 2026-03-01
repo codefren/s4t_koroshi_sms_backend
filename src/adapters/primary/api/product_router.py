@@ -12,7 +12,7 @@ from typing import Optional
 import math
 
 from src.adapters.secondary.database.config import SessionLocal
-from src.adapters.secondary.database.orm import ProductReference, ProductLocation
+from src.adapters.secondary.database.orm import ProductReference, ProductLocation, EAN
 from src.core.domain.models import ProductLocationCreate, ProductLocationResponse
 from src.core.domain.product_api_models import (
     ProductListResponse,
@@ -204,26 +204,37 @@ def list_products(
     )
     
     # Query base con stock calculado en SQL
-    query = db.query(
-        ProductReference,
-        func.coalesce(stock_subquery.c.total_stock, 0).label('stock_total')
-    ).outerjoin(
-        stock_subquery, ProductReference.id == stock_subquery.c.product_id
-    )
-    
-    # Filtrar por almacén si se especifica (solo productos con ubicaciones en ese almacén)
     if almacen_id:
-        query = query.filter(stock_subquery.c.product_id.isnot(None))
+        # JOIN directo: solo productos con ubicaciones en este almacén (mucho más eficiente)
+        query = db.query(
+            ProductReference,
+            stock_subquery.c.total_stock.label('stock_total')
+        ).join(
+            stock_subquery, ProductReference.id == stock_subquery.c.product_id
+        )
+    else:
+        # OUTERJOIN: incluye productos sin ubicaciones (stock=0)
+        query = db.query(
+            ProductReference,
+            func.coalesce(stock_subquery.c.total_stock, 0).label('stock_total')
+        ).outerjoin(
+            stock_subquery, ProductReference.id == stock_subquery.c.product_id
+        )
     
     # Aplicar búsqueda
     if search:
         search_pattern = f"%{search}%"
+        ean_exists = db.query(EAN.id).filter(
+            EAN.product_reference_id == ProductReference.id,
+            EAN.ean.ilike(search_pattern)
+        ).exists()
         query = query.filter(
             or_(
                 ProductReference.nombre_producto.ilike(search_pattern),
                 ProductReference.sku.ilike(search_pattern),
-                ProductReference.color.ilike(search_pattern),
-                ProductReference.referencia.ilike(search_pattern)
+                ProductReference.temporada.ilike(search_pattern),
+                ProductReference.referencia.ilike(search_pattern),
+                ean_exists
             )
         )
     
@@ -238,15 +249,18 @@ def list_products(
     elif status == ProductStatusFilter.ACTIVE:
         query = query.filter(func.coalesce(stock_subquery.c.total_stock, 0) >= 50)
     
-    # Contar total DESPUÉS de aplicar todos los filtros
-    total = query.count()
+    # Contar total - método eficiente sin envolver en subquery
+    total = query.with_entities(func.count(ProductReference.id)).scalar()
     
     # Aplicar ordenamiento
     query = query.order_by(ProductReference.id.asc())
     
     # Aplicar paginación
     offset = (page - 1) * per_page
-    results = query.offset(offset).limit(per_page).all()
+    results = query.with_entities(
+        ProductReference, 
+        func.coalesce(stock_subquery.c.total_stock, 0).label('stock_total')
+    ).offset(offset).limit(per_page).all()
     
     # Obtener IDs de productos para cargar ubicaciones eficientemente
     product_ids = [product.id for product, _ in results]
@@ -317,7 +331,8 @@ def get_product(
     - Estado calculado
     """
     product = db.query(ProductReference).options(
-        joinedload(ProductReference.locations)
+        joinedload(ProductReference.locations),
+        joinedload(ProductReference.eans)
     ).filter(ProductReference.id == product_id).first()
     
     if not product:
@@ -344,6 +359,9 @@ def get_product(
                 activa=loc.activa
             ))
     
+    # Obtener lista de EANs asociados al producto
+    ean_list = [e.ean for e in product.eans] if product.eans else []
+    
     return ProductDetail(
         id=product.id,
         referencia=product.referencia,
@@ -354,6 +372,7 @@ def get_product(
         descripcion_color=product.nombre_color,
         category=product.temporada,
         talla=product.talla,
+        eans=ean_list,
         temporada=product.temporada,
         activo=product.activo,
         stock=stock,

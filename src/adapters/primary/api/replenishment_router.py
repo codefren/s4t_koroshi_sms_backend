@@ -6,7 +6,7 @@ between picking and replenishment zones.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, aliased
 from datetime import datetime, timedelta
 from typing import Optional
 import math
@@ -15,9 +15,12 @@ from src.adapters.secondary.database.config import SessionLocal
 from src.adapters.secondary.database.orm import (
     ReplenishmentRequest, ProductLocation, ProductReference, Operator
 )
+from sqlalchemy import func as sa_func
 from src.core.domain.replenishment_models import (
-    ReplenishmentRequestListResponse,
     ReplenishmentRequestListItem,
+    ReplenishmentRequestListResponse,
+    StatusCounts,
+    PriorityCounts,
     StartExecutionRequest,
     RejectRequest
 )
@@ -56,6 +59,7 @@ def calculate_time_waiting(requested_at: datetime) -> str:
 def list_replenishment_requests(
     status: Optional[str] = Query(None, description="Filter by status: WAITING_STOCK, READY, IN_PROGRESS, COMPLETED, REJECTED"),
     priority: Optional[str] = Query(None, description="Filter by priority: URGENT, HIGH, NORMAL"),
+    solo_prioritarias: bool = Query(False, description="Solo URGENT y HIGH (para PDA). Ignora el filtro priority si está activo."),
     almacen_id: Optional[int] = Query(None, description="Filter by warehouse"),
     product_id: Optional[int] = Query(None, description="Filter by product"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -68,6 +72,7 @@ def list_replenishment_requests(
     **Filters:**
     - `status`: Filter by request status
     - `priority`: Filter by priority level
+    - `solo_prioritarias`: Solo URGENT y HIGH (para PDA)
     - `almacen_id`: Filter by warehouse
     - `product_id`: Filter by product
     
@@ -89,10 +94,25 @@ def list_replenishment_requests(
     if status:
         query = query.filter(ReplenishmentRequest.status == status)
     
-    if priority:
+    if solo_prioritarias:
+        query = query.filter(ReplenishmentRequest.priority.in_(["URGENT", "HIGH"]))
+        # PDA: solo reposiciones de almacén 1 (reposición) → almacén 2 (picking)
+        origin_loc = aliased(ProductLocation)
+        dest_loc = aliased(ProductLocation)
+        query = query.join(
+            origin_loc,
+            ReplenishmentRequest.location_origen_id == origin_loc.id
+        ).join(
+            dest_loc,
+            ReplenishmentRequest.location_destino_id == dest_loc.id
+        ).filter(
+            origin_loc.almacen_id == 1,
+            dest_loc.almacen_id == 2
+        )
+    elif priority:
         query = query.filter(ReplenishmentRequest.priority == priority)
     
-    if almacen_id:
+    if almacen_id and not solo_prioritarias:
         query = query.join(
             ProductLocation,
             ReplenishmentRequest.location_destino_id == ProductLocation.id
@@ -136,11 +156,42 @@ def list_replenishment_requests(
     
     total_pages = math.ceil(total / per_page) if total > 0 else 0
     
+    # Count by status (global, ignoring filters)
+    counts_rows = db.query(
+        ReplenishmentRequest.status,
+        sa_func.count(ReplenishmentRequest.id)
+    ).group_by(ReplenishmentRequest.status).all()
+    
+    counts_dict = {row[0]: row[1] for row in counts_rows}
+    
+    status_counts = StatusCounts(
+        WAITING_STOCK=counts_dict.get("WAITING_STOCK", 0),
+        READY=counts_dict.get("READY", 0),
+        IN_PROGRESS=counts_dict.get("IN_PROGRESS", 0),
+        COMPLETED=counts_dict.get("COMPLETED", 0),
+        REJECTED=counts_dict.get("REJECTED", 0),
+    )
+    
+    # Count by priority (global, ignoring filters)
+    priority_rows = db.query(
+        ReplenishmentRequest.priority,
+        sa_func.count(ReplenishmentRequest.id)
+    ).group_by(ReplenishmentRequest.priority).all()
+    
+    priority_dict = {row[0]: row[1] for row in priority_rows}
+    priority_counts = PriorityCounts(
+        URGENT=priority_dict.get("URGENT", 0),
+        HIGH=priority_dict.get("HIGH", 0),
+        NORMAL=priority_dict.get("NORMAL", 0),
+    )
+    
     return ReplenishmentRequestListResponse(
         total=total,
         page=page,
         per_page=per_page,
         total_pages=total_pages,
+        status_counts=status_counts,
+        priority_counts=priority_counts,
         requests=items
     )
 
@@ -395,4 +446,106 @@ def get_replenishment_request(
         "started_at": request.started_at.isoformat() if request.started_at else None,
         "completed_at": request.completed_at.isoformat() if request.completed_at else None,
         "time_waiting": calculate_time_waiting(request.requested_at)
+    }
+
+
+@router.get("/diagnostic")
+def replenishment_diagnostic(
+    db: Session = Depends(get_db)
+):
+    """
+    Diagnóstico del sistema de reposición automática.
+    
+    Muestra por qué ciertos productos con stock bajo NO tienen solicitud de reposición.
+    """
+    from sqlalchemy import func
+    
+    PICKING_WAREHOUSE_ID = 2
+    REPLENISHMENT_WAREHOUSE_ID = 1
+    
+    # 1. Operador SYSTEM existe?
+    system_operator = db.query(Operator).filter(Operator.codigo == "SYSTEM").first()
+    
+    # 2. Ubicaciones con stock bajo en picking
+    low_stock_locations = db.query(ProductLocation).filter(
+        ProductLocation.almacen_id == PICKING_WAREHOUSE_ID,
+        ProductLocation.activa == True,
+        ProductLocation.stock_actual < ProductLocation.stock_minimo,
+        ProductLocation.stock_minimo > 0,
+    ).all()
+    
+    # 3. Ubicaciones con stock_minimo = 0 (ignoradas por el cron)
+    zero_minimum = db.query(func.count(ProductLocation.id)).filter(
+        ProductLocation.almacen_id == PICKING_WAREHOUSE_ID,
+        ProductLocation.activa == True,
+        ProductLocation.stock_minimo == 0,
+    ).scalar()
+    
+    # 4. Ubicaciones con stock_minimo NULL
+    null_minimum = db.query(func.count(ProductLocation.id)).filter(
+        ProductLocation.almacen_id == PICKING_WAREHOUSE_ID,
+        ProductLocation.activa == True,
+        ProductLocation.stock_minimo == None,
+    ).scalar()
+    
+    # 5. Para cada ubicación con stock bajo, verificar si ya tiene solicitud
+    details = []
+    already_has_request = 0
+    no_request = 0
+    
+    for loc in low_stock_locations:
+        existing = db.query(ReplenishmentRequest).filter(
+            ReplenishmentRequest.product_id == loc.product_id,
+            ReplenishmentRequest.location_destino_id == loc.id,
+            ReplenishmentRequest.status.in_(["WAITING_STOCK", "READY", "IN_PROGRESS"]),
+        ).first()
+        
+        # Buscar stock en almacén de reposición
+        origin = db.query(ProductLocation).filter(
+            ProductLocation.product_id == loc.product_id,
+            ProductLocation.almacen_id == REPLENISHMENT_WAREHOUSE_ID,
+            ProductLocation.activa == True,
+            ProductLocation.stock_actual > 0,
+        ).first()
+        
+        product = db.query(ProductReference).filter_by(id=loc.product_id).first()
+        
+        if existing:
+            already_has_request += 1
+            reason = f"Ya tiene solicitud #{existing.id} ({existing.status})"
+        else:
+            no_request += 1
+            reason = "SIN SOLICITUD - debería crearse"
+        
+        details.append({
+            "location_id": loc.id,
+            "product_id": loc.product_id,
+            "product_name": product.nombre_producto if product else "N/A",
+            "sku": product.sku if product else "N/A",
+            "location_code": loc.codigo_ubicacion,
+            "stock_actual": loc.stock_actual,
+            "stock_minimo": loc.stock_minimo,
+            "deficit": loc.stock_minimo - loc.stock_actual,
+            "has_origin_stock": origin is not None,
+            "origin_stock": origin.stock_actual if origin else 0,
+            "reason": reason,
+        })
+    
+    # 6. Solicitudes activas
+    active_requests = db.query(func.count(ReplenishmentRequest.id)).filter(
+        ReplenishmentRequest.status.in_(["WAITING_STOCK", "READY", "IN_PROGRESS"])
+    ).scalar()
+    
+    return {
+        "system_operator_exists": system_operator is not None,
+        "system_operator_id": system_operator.id if system_operator else None,
+        "picking_warehouse_id": PICKING_WAREHOUSE_ID,
+        "replenishment_warehouse_id": REPLENISHMENT_WAREHOUSE_ID,
+        "total_low_stock_locations": len(low_stock_locations),
+        "ignored_zero_minimum": zero_minimum,
+        "ignored_null_minimum": null_minimum,
+        "already_has_pending_request": already_has_request,
+        "missing_request": no_request,
+        "active_requests_total": active_requests,
+        "details": details[:50],
     }

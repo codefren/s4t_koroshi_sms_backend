@@ -2,7 +2,7 @@
 Router para gestión de operarios.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 
 from src.adapters.secondary.database.config import get_db
@@ -252,6 +252,62 @@ def list_operator_orders(
     return result
 
 
+@router.get("/{operator_codigo}/orders/{order_id}/summary")
+def get_order_summary(
+    operator_codigo: str,
+    order_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Resumen de una orden asignada a un operario.
+    
+    **Retorna:**
+    - total_productos: suma de cantidad_solicitada de todas las líneas
+    - total_servido: suma de cantidad_servida de todas las líneas
+    - fecha_asignacion: fecha en que se asignó al operario
+    - prioridad: prioridad de la orden
+    - progreso: porcentaje completado (servido / solicitado)
+    """
+    operator = db.query(Operator).filter(Operator.codigo == operator_codigo).first()
+    if not operator:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Operario con código '{operator_codigo}' no encontrado"
+        )
+    
+    order = db.query(Order).options(
+        joinedload(Order.order_lines),
+        joinedload(Order.status)
+    ).filter(Order.id == order_id).first()
+    
+    if not order:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Orden con ID {order_id} no encontrada"
+        )
+    
+    if order.operator_id != operator.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Esta orden no está asignada a este operario"
+        )
+    
+    total_solicitado = sum(line.cantidad_solicitada for line in order.order_lines)
+    total_servido = sum(line.cantidad_servida for line in order.order_lines)
+    progreso = round((total_servido / total_solicitado * 100) if total_solicitado > 0 else 0, 2)
+    
+    return {
+        "order_id": order.id,
+        "numero_orden": order.numero_orden,
+        "estado": order.status.codigo if order.status else "UNKNOWN",
+        "total_productos": total_solicitado,
+        "total_servido": total_servido,
+        "fecha_asignacion": order.fecha_asignacion.isoformat() if order.fecha_asignacion else None,
+        "prioridad": order.prioridad,
+        "progreso": progreso
+    }
+
+
 @router.get("/{operator_codigo}/orders/{order_id}/lines")
 def list_order_lines(
     operator_codigo: str,
@@ -436,91 +492,4 @@ def start_picking(
         "numero_orden": order.numero_orden,
         "estado": order.status.codigo,
         "fecha_inicio_picking": order.fecha_inicio_picking.isoformat()
-    }
-
-
-@router.post("/{operator_codigo}/orders/{order_id}/complete-picking")
-def complete_picking(
-    operator_codigo: str,
-    order_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    Completa el proceso de picking de una orden.
-    
-    **Parámetros:**
-    - `operator_codigo`: Código del operario (ej: "OP001", "OP002")
-    - `order_id`: ID de la orden
-    
-    **Acción:**
-    - Cambia el estado de la orden a PICKED
-    - Registra la fecha de fin de picking
-    
-    **Retorna:**
-    - Información actualizada de la orden
-    """
-    # Buscar operario por código
-    operator = db.query(Operator).filter(Operator.codigo == operator_codigo).first()
-    if not operator:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Operario con código '{operator_codigo}' no encontrado"
-        )
-    
-    # Verificar que la orden existe y está asignada al operario
-    order = db.query(Order).filter(Order.id == order_id).first()
-    if not order:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Orden con ID {order_id} no encontrada"
-        )
-    
-    if order.operator_id != operator.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Esta orden no está asignada a este operario"
-        )
-    
-    # Verificar estado actual
-    # Si ya está en PICKED, devolver respuesta exitosa (idempotente)
-    if order.status.codigo == "PICKED":
-        return {
-            "message": "El picking de esta orden ya está completado",
-            "order_id": order.id,
-            "numero_orden": order.numero_orden,
-            "estado": order.status.codigo,
-            "fecha_fin_picking": order.fecha_fin_picking.isoformat() if order.fecha_fin_picking else None
-        }
-    
-    # Si no está en IN_PICKING, no se puede completar
-    if order.status.codigo != "IN_PICKING":
-        raise HTTPException(
-            status_code=400,
-            detail=f"No se puede completar picking. Estado actual: {order.status.codigo}"
-        )
-    
-    # Cambiar estado a PICKED
-    picked_status = db.query(OrderStatus).filter(
-        OrderStatus.codigo == "PICKED"
-    ).first()
-    
-    if not picked_status:
-        raise HTTPException(
-            status_code=500,
-            detail="Estado PICKED no encontrado en el sistema"
-        )
-    
-    order.status_id = picked_status.id
-    order.fecha_fin_picking = datetime.utcnow()
-    
-    db.commit()
-    db.refresh(order)
-    
-    return {
-        "message": "Picking completado correctamente",
-        "order_id": order.id,
-        "numero_orden": order.numero_orden,
-        "estado": order.status.codigo,
-        "fecha_inicio_picking": order.fecha_inicio_picking.isoformat() if order.fecha_inicio_picking else None,
-        "fecha_fin_picking": order.fecha_fin_picking.isoformat()
     }
