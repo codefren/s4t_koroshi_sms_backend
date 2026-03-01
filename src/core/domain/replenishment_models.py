@@ -82,12 +82,30 @@ class ReplenishmentRequestListItem(BaseModel):
     time_waiting: str  # "15 min", "2 hours", etc.
 
 
+class PriorityCounts(BaseModel):
+    """Count of requests per priority"""
+    URGENT: int = 0
+    HIGH: int = 0
+    NORMAL: int = 0
+
+
+class StatusCounts(BaseModel):
+    """Count of requests per status"""
+    WAITING_STOCK: int = 0
+    READY: int = 0
+    IN_PROGRESS: int = 0
+    COMPLETED: int = 0
+    REJECTED: int = 0
+
+
 class ReplenishmentRequestListResponse(BaseModel):
     """Paginated list response"""
     total: int
     page: int
     per_page: int
     total_pages: int
+    status_counts: StatusCounts
+    priority_counts: PriorityCounts
     requests: list[ReplenishmentRequestListItem]
 
 
