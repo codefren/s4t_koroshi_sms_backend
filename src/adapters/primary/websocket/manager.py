@@ -71,6 +71,27 @@ class ConnectionManager:
             True si está conectado, False en caso contrario
         """
         return codigo_operario in self.connections
+    
+    async def broadcast(self, message: dict, exclude: str = None):
+        """
+        Envía un mensaje a todos los operarios conectados.
+        
+        Args:
+            message: Diccionario con el mensaje a enviar
+            exclude: Código de operario a excluir del broadcast (opcional)
+        """
+        disconnected = []
+        for codigo, ws in self.connections.items():
+            if codigo == exclude:
+                continue
+            try:
+                await ws.send_json(message)
+            except Exception as e:
+                print(f"Error en broadcast a operario {codigo}: {e}")
+                disconnected.append(codigo)
+        
+        for codigo in disconnected:
+            self.disconnect(codigo)
 
 
 # Instancia global del manager
