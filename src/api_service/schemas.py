@@ -33,6 +33,8 @@ class CustomerResponse(CustomerBase):
 class OrderListItem(BaseModel):
     """Minimal order info for listing"""
     id: int
+    client: Optional[str] = None
+    client_name: Optional[str] = None
     order_number: str = Field(validation_alias="numero_orden")
     total_lines: int
     

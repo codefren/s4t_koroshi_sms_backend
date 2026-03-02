@@ -101,6 +101,8 @@ def get_customer_b2b_orders(
         lines_count = db.query(OrderLine).filter(OrderLine.order_id == order.id).count()
         order_dict = {
             "id": order.id,
+            "client": order.cliente,
+            "client_name": order.nombre_cliente,
             "order_number": order.numero_orden,
             "total_lines": lines_count
         }
@@ -187,6 +189,8 @@ def get_customer_b2c_orders(
         lines_count = db.query(OrderLine).filter(OrderLine.order_id == order.id).count()
         order_dict = {
             "id": order.id,
+            "client": order.cliente,
+            "client_name": order.nombre_cliente,
             "order_number": order.numero_orden,
             "total_lines": lines_count
         }
