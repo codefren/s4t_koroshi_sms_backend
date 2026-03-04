@@ -1,8 +1,15 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 import urllib
-
 import os
+import logging
+from dotenv import load_dotenv
+
+# Configurar logger
+logger = logging.getLogger(__name__)
+
+# Cargar variables de entorno desde archivo .env
+load_dotenv()
 
 # Example Connection String for ODBC
 # In a real app, load these from environment variables
@@ -14,6 +21,17 @@ PASSWORD = os.getenv('DB_PASSWORD', 'YourStrong@Passw0rd')
 # Warehouse IDs for picking and replenishment zones
 ALMACEN_PICKING_ID = int(os.getenv('ALMACEN_PICKING_ID', '3'))  # Zona de picking
 ALMACEN_REPOSICION_ID = int(os.getenv('ALMACEN_REPOSICION_ID', '4'))  # Zona de reposición
+
+# Log de configuración cargada (sin información sensible)
+logger.info("=" * 60)
+logger.info("📋 Configuración de Base de Datos y Almacenes")
+logger.info(f"   🖥️  Server: {SERVER}")
+logger.info(f"   🗄️  Database: {DATABASE}")
+logger.info(f"   👤 Username: {USERNAME}")
+logger.info(f"   🔑 Password: {'*' * len(PASSWORD) if PASSWORD else 'NOT SET'}")
+logger.info(f"   📦 Almacén Picking ID: {ALMACEN_PICKING_ID}")
+logger.info(f"   📦 Almacén Reposición ID: {ALMACEN_REPOSICION_ID}")
+logger.info("=" * 60)
 # Try ODBC Driver 18 (default for Ubuntu 22.04+), fall back manually if needed
 DRIVER = '{ODBC Driver 18 for SQL Server}'
 
