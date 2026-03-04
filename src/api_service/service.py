@@ -722,14 +722,38 @@ def batch_update_order(
             external_api_response = {"raw_response": response.text}
         
         # 8.8 Check response status and commit/rollback accordingly
-        if response.status_code != 201:
+        # Verify both HTTP status code AND success field in response body
+        api_success = False
+        if response.status_code == 201 and isinstance(external_api_response, dict):
+            api_success = external_api_response.get('success', False)
+        
+        if not api_success:
             db.rollback()
-            logger.error(f"External Packing API returned {response.status_code}")
+            logger.error(f"External Packing API returned status {response.status_code}, success={external_api_response.get('success', 'N/A') if isinstance(external_api_response, dict) else 'N/A'}")
+            
+            # Extract error message from external API response
+            error_message = "Unknown error from external API"
+            if isinstance(external_api_response, dict):
+                error_message = external_api_response.get('error', external_api_response.get('message', str(external_api_response)))
+            
+            logger.info(f"External Packing API error response: {external_api_response}")
+            
+            # Return properly formatted error response matching BatchUpdateOrderResponse schema
+            return BatchUpdateOrderResponse(
+                status="error",
+                message=f"External API error: {error_message}",
+                order_number=order.numero_orden,
+                order_status="PENDING",
+                lines_updated=len(sku_quantities),
+                lines_completed=lines_completed,
+                lines_partial=lines_partial,
+                lines_pending=lines_pending
+            )
         else:
             ready_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'READY').first()
             if ready_status:
                 order.status_id = ready_status.id
-            logger.info("External Packing API returned 201 - Success!")
+            logger.info("External Packing API returned 201 with success=true - Success!")
             db.commit()
         
         # Always return external API response

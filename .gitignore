@@ -150,9 +150,13 @@ cython_debug/
 *.sqlite
 *.sqlite3
 
+# Database backups
+src/adapters/secondary/database/backup/
+
 # Logs
 *.log
 logs/
+src/logs/
 
 # Local config files
 config.local.py

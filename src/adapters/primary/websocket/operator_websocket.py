@@ -5,11 +5,14 @@ Maneja la conexión WebSocket y el escaneo de productos en tiempo real.
 """
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy.orm import Session
+from typing import Dict, Any
 from datetime import datetime
 from sqlalchemy import case
 
 from .manager import manager
 from ...secondary.database.orm import Operator, Order, OrderLine, OrderLineBoxDistribution, PackingBox, ReplenishmentRequest, ProductLocation, StockMovement
+from ...secondary.database.config import ALMACEN_PICKING_ID, ALMACEN_REPOSICION_ID, SessionLocal
 
 
 router = APIRouter()
@@ -417,30 +420,20 @@ async def handle_request_replenishment(
             await send_error(websocket, "LOCATION_NOT_FOUND", "Ubicación destino no encontrada")
             return
         
-        # 2. Buscar ubicación con stock disponible (zona reposición)
-        # Prioridad: ubicaciones con pasillo que empiece con "REP" o mayor stock
+        # 2. Buscar ubicación con stock disponible en zona de reposición
+        # Busca en el almacén de reposición (ALMACEN_REPOSICION_ID)
         location_origen = None
         available_locations = db.query(ProductLocation).filter(
             ProductLocation.product_id == product_id,
-            ProductLocation.almacen_id == location_destino.almacen_id,
+            ProductLocation.almacen_id == ALMACEN_REPOSICION_ID,
             ProductLocation.activa == True,
-            ProductLocation.id != location_destino_id,
             ProductLocation.stock_actual > 0
+        ).order_by(
+            ProductLocation.prioridad.asc(),      # Prioridad alta primero
+            ProductLocation.stock_actual.desc()   # Mayor stock primero
         ).all()
         
-        # Filtrar ubicaciones de reposición
-        replenishment_locations = [
-            loc for loc in available_locations
-            if loc.pasillo and loc.pasillo.upper().startswith("REP")
-        ]
-        
-        if replenishment_locations:
-            # Ordenar por stock descendente
-            replenishment_locations.sort(key=lambda x: -x.stock_actual)
-            location_origen = replenishment_locations[0]
-        elif available_locations:
-            # Si no hay zona específica, usar ubicación con más stock
-            available_locations.sort(key=lambda x: -x.stock_actual)
+        if available_locations:
             location_origen = available_locations[0]
         
         # 3. Calcular cantidad solicitada

@@ -502,11 +502,10 @@ class OrderLine(Base):
     # COMPLETED: Se recogió todo (cantidad_servida == cantidad_solicitada)
     estado = Column(String(20), default='PENDING', nullable=False, index=True)
     
-    # === RESERVA DE STOCK ===
-    # Indica si esta línea ya tiene stock reservado en la ubicación de picking
-    # True = stock_reservado incrementado en ProductLocation
-    # False = sin reserva (pendiente o ya consumida)
-    stock_reserved = Column(Boolean, default=False, nullable=False)
+    # Indica si el stock para esta línea ha sido reservado en el sistema de inventario
+    # True = Stock reservado, False = Sin reservar
+    # Usado por el servicio de reserva automática de stock
+    stock_reserved = Column(Boolean, default=False, nullable=False, index=True)
     
     # Timestamp de cuando el customer B2B visualizó esta línea de orden por primera vez
     # Se registra solo en la primera consulta a través del API B2B
@@ -902,6 +901,7 @@ class ProductLocation(Base):
     
     # Stock reservado por órdenes pendientes (PENDING/ASSIGNED/IN_PICKING)
     # stock_disponible = stock_actual - stock_reservado
+    # Usado por el servicio de reserva automática de stock
     stock_reservado = Column(Integer, default=0, nullable=False)
     
     # === INFORMACIÓN ADICIONAL ===
@@ -1000,7 +1000,7 @@ class ReplenishmentRequest(Base):
     
     product_id = Column(Integer, ForeignKey("product_references.id", ondelete="NO ACTION"), nullable=False, index=True)
     requested_quantity = Column(Integer, nullable=False)
-    actual_quantity = Column(Integer, nullable=True)
+    actual_quantity = Column(Integer, nullable=True)  # Cantidad realmente movida (puede ser menor que requested)
     
     # WAITING_STOCK, READY, IN_PROGRESS, COMPLETED, REJECTED
     status = Column(String(20), nullable=False, default="WAITING_STOCK", index=True)

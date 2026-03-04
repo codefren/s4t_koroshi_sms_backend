@@ -1,18 +1,21 @@
 """
 Router para gestión de operarios.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
+from datetime import datetime
 
-from src.adapters.secondary.database.config import get_db
-from src.adapters.secondary.database.orm import Operator, Order, OrderLine, OrderStatus, ProductLocation
-from src.core.domain.models import (
+from ...secondary.database.config import get_db, ALMACEN_PICKING_ID
+from ...secondary.database.orm import (
+    Operator, Order, OrderStatus, OrderLine, OrderHistory, 
+    PackingBox, ProductLocation, ProductReference
+)
+from ...core.domain.models import (
     OperatorResponse,
     OperatorCreate,
     OperatorUpdate
 )
-from datetime import datetime
 
 router = APIRouter(prefix="/operators", tags=["Operators"])
 
@@ -354,7 +357,7 @@ def list_order_lines(
     # Formatear respuesta
     result = []
     for line in lines:
-        # Buscar ubicación de picking (almacen_id=2) desde ProductLocation
+        # Buscar ubicación de picking desde ProductLocation
         picking_location = None
         ubicacion_id = None
         ubicacion = None
@@ -363,7 +366,7 @@ def list_order_lines(
             # Buscar la mejor ubicación en el almacén de picking
             picking_location = db.query(ProductLocation).filter(
                 ProductLocation.product_id == line.product_reference_id,
-                ProductLocation.almacen_id == 2,  # Almacén de picking
+                ProductLocation.almacen_id == ALMACEN_PICKING_ID,
                 ProductLocation.activa == True
             ).order_by(
                 ProductLocation.prioridad.asc(),      # 1 = alta prioridad primero

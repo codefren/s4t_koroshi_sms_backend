@@ -10,6 +10,10 @@ SERVER = os.getenv('DB_SERVER', '127.0.0.1')
 DATABASE = os.getenv('DB_NAME', 'S4T_SMS_RESTORE')  # Nueva base de datos creada
 USERNAME = os.getenv('DB_USER', 'sa')
 PASSWORD = os.getenv('DB_PASSWORD', 'YourStrong@Passw0rd')
+
+# Warehouse IDs for picking and replenishment zones
+ALMACEN_PICKING_ID = int(os.getenv('ALMACEN_PICKING_ID', '3'))  # Zona de picking
+ALMACEN_REPOSICION_ID = int(os.getenv('ALMACEN_REPOSICION_ID', '4'))  # Zona de reposición
 # Try ODBC Driver 18 (default for Ubuntu 22.04+), fall back manually if needed
 DRIVER = '{ODBC Driver 18 for SQL Server}'
 
