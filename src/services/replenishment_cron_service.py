@@ -23,8 +23,8 @@ from sqlalchemy.orm import Session
 
 from src.adapters.secondary.database.config import (
     SessionLocal,
-    REPLENISHMENT_WAREHOUSE_ID,
-    PICKING_WAREHOUSE_ID,
+    ALMACEN_REPOSICION_ID as REPLENISHMENT_WAREHOUSE_ID,  # Almacén origen (reposición)
+    ALMACEN_PICKING_ID as PICKING_WAREHOUSE_ID,  # Almacén destino (picking)
     CRON_INTERVAL_MINUTES,
     SYSTEM_OPERATOR_CODE
 )

@@ -21,8 +21,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from src.adapters.secondary.database.config import (
     SessionLocal,
-    REPLENISHMENT_WAREHOUSE_ID,
-    PICKING_WAREHOUSE_ID,
+    ALMACEN_REPOSICION_ID,
+    ALMACEN_PICKING_ID,
     CRON_INTERVAL_MINUTES,
     SYSTEM_OPERATOR_CODE
 )
@@ -181,7 +181,7 @@ class StockReservationCronService:
             self.db.query(ProductLocation)
             .filter(
                 ProductLocation.product_id == product_id,
-                ProductLocation.almacen_id == PICKING_WAREHOUSE_ID,
+                ProductLocation.almacen_id == ALMACEN_PICKING_ID,
                 ProductLocation.activa == True,
             )
             .order_by(
@@ -251,7 +251,7 @@ class StockReservationCronService:
             self.db.query(ProductLocation)
             .filter(
                 ProductLocation.product_id == product_id,
-                ProductLocation.almacen_id == PICKING_WAREHOUSE_ID,
+                ProductLocation.almacen_id == ALMACEN_PICKING_ID,
                 ProductLocation.activa == True,
             )
             .order_by(ProductLocation.prioridad.asc())
@@ -266,7 +266,7 @@ class StockReservationCronService:
             self.db.query(ProductLocation)
             .filter(
                 ProductLocation.product_id == product_id,
-                ProductLocation.almacen_id == REPLENISHMENT_WAREHOUSE_ID,
+                ProductLocation.almacen_id == ALMACEN_REPOSICION_ID,
                 ProductLocation.activa == True,
                 ProductLocation.stock_actual > 0,
             )
