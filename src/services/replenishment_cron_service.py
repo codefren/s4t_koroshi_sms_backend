@@ -21,7 +21,13 @@ from typing import Dict, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from src.adapters.secondary.database.config import SessionLocal
+from src.adapters.secondary.database.config import (
+    SessionLocal,
+    REPLENISHMENT_WAREHOUSE_ID,
+    PICKING_WAREHOUSE_ID,
+    CRON_INTERVAL_MINUTES,
+    SYSTEM_OPERATOR_CODE
+)
 from src.adapters.secondary.database.orm import (
     ProductLocation,
     ProductReference,
@@ -31,12 +37,6 @@ from src.adapters.secondary.database.orm import (
 from src.adapters.primary.websocket.manager import manager
 
 logger = logging.getLogger(__name__)
-
-# === CONFIGURACIÓN ===
-REPLENISHMENT_WAREHOUSE_ID = 1  # Almacén de reposición (origen)
-PICKING_WAREHOUSE_ID = 2       # Almacén de picking (destino)
-CRON_INTERVAL_MINUTES = 1       # Frecuencia de ejecución
-SYSTEM_OPERATOR_CODE = "SYSTEM" # Código del operador sistema
 
 
 class ReplenishmentCronService:

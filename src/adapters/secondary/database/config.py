@@ -22,6 +22,12 @@ PASSWORD = os.getenv('DB_PASSWORD', 'YourStrong@Passw0rd')
 ALMACEN_PICKING_ID = int(os.getenv('ALMACEN_PICKING_ID', '3'))  # Zona de picking
 ALMACEN_REPOSICION_ID = int(os.getenv('ALMACEN_REPOSICION_ID', '4'))  # Zona de reposición
 
+# Cron Services Configuration
+REPLENISHMENT_WAREHOUSE_ID = int(os.getenv('REPLENISHMENT_WAREHOUSE_ID', '1'))  # Almacén de reposición (origen)
+PICKING_WAREHOUSE_ID = int(os.getenv('PICKING_WAREHOUSE_ID', '2'))  # Almacén de picking (destino)
+CRON_INTERVAL_MINUTES = int(os.getenv('CRON_INTERVAL_MINUTES', '1'))  # Frecuencia de ejecución de crons
+SYSTEM_OPERATOR_CODE = os.getenv('SYSTEM_OPERATOR_CODE', 'SYSTEM')  # Código del operador sistema
+
 # Log de configuración cargada (sin información sensible)
 logger.info("=" * 60)
 logger.info("📋 Configuración de Base de Datos y Almacenes")
@@ -31,6 +37,12 @@ logger.info(f"   👤 Username: {USERNAME}")
 logger.info(f"   🔑 Password: {'*' * len(PASSWORD) if PASSWORD else 'NOT SET'}")
 logger.info(f"   📦 Almacén Picking ID: {ALMACEN_PICKING_ID}")
 logger.info(f"   📦 Almacén Reposición ID: {ALMACEN_REPOSICION_ID}")
+logger.info("")
+logger.info("⚙️  Configuración de Servicios Cron")
+logger.info(f"   🔄 Almacén Reposición (origen): {REPLENISHMENT_WAREHOUSE_ID}")
+logger.info(f"   🔄 Almacén Picking (destino): {PICKING_WAREHOUSE_ID}")
+logger.info(f"   ⏰ Intervalo Cron: {CRON_INTERVAL_MINUTES} minuto(s)")
+logger.info(f"   🤖 Operador Sistema: {SYSTEM_OPERATOR_CODE}")
 logger.info("=" * 60)
 # Try ODBC Driver 18 (default for Ubuntu 22.04+), fall back manually if needed
 DRIVER = '{ODBC Driver 18 for SQL Server}'

@@ -19,7 +19,13 @@ from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session, joinedload
 
-from src.adapters.secondary.database.config import SessionLocal
+from src.adapters.secondary.database.config import (
+    SessionLocal,
+    REPLENISHMENT_WAREHOUSE_ID,
+    PICKING_WAREHOUSE_ID,
+    CRON_INTERVAL_MINUTES,
+    SYSTEM_OPERATOR_CODE
+)
 from src.adapters.secondary.database.orm import (
     Order,
     OrderLine,
@@ -31,12 +37,6 @@ from src.adapters.secondary.database.orm import (
 )
 
 logger = logging.getLogger(__name__)
-
-# === CONFIGURACIÓN ===
-REPLENISHMENT_WAREHOUSE_ID = 1  # Almacén de reposición (origen)
-PICKING_WAREHOUSE_ID = 2        # Almacén de picking (destino)
-CRON_INTERVAL_MINUTES = 1       # Frecuencia de ejecución
-SYSTEM_OPERATOR_CODE = "SYSTEM"  # Operador sistema para solicitudes automáticas
 
 # Estados de orden donde se reserva stock
 RESERVATION_STATUS_CODES = ["PENDING", "ASSIGNED", "IN_PICKING"]
