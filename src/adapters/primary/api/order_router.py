@@ -59,24 +59,11 @@ def list_orders(
     - Prioridad
     - Estado
     """
-    # Query base con joins para obtener estado y operario
-    query = db.query(
-        Order.id,
-        Order.numero_orden,
-        Order.cliente,
-        Order.nombre_cliente,
-        Order.total_items,
-        Order.items_completados,
-        Order.prioridad,
-        Order.fecha_orden,
-        Order.fecha_importacion,
-        OrderStatus.nombre.label("estado"),
-        OrderStatus.codigo.label("estado_codigo"),
-        Operator.nombre.label("operario_nombre")
-    ).join(
-        OrderStatus, Order.status_id == OrderStatus.id
-    ).outerjoin(
-        Operator, Order.operator_id == Operator.id
+    # Query base - obtener instancias completas de Order con relaciones
+    query = db.query(Order).options(
+        joinedload(Order.status),
+        joinedload(Order.operator),
+        joinedload(Order.order_lines)  # Necesario para calcular total_items e items_completados
     )
     
     # Aplicar filtros opcionales
@@ -84,7 +71,7 @@ def list_orders(
         query = query.filter(Order.prioridad == prioridad.upper())
     
     if estado_codigo:
-        query = query.filter(OrderStatus.codigo == estado_codigo.upper())
+        query = query.join(OrderStatus).filter(OrderStatus.codigo == estado_codigo.upper())
     
     # Ordenar por fecha de importación descendente (más recientes primero)
     query = query.order_by(Order.fecha_importacion.desc())
@@ -97,26 +84,26 @@ def list_orders(
     
     # Transformar resultados a modelo Pydantic
     orders = []
-    for row in results:
-        # Calcular progreso
+    for order in results:
+        # Calcular progreso usando las hybrid_property
         progreso = 0.0
-        if row.total_items > 0:
-            progreso = round((row.items_completados / row.total_items) * 100, 2)
+        if order.total_items > 0:
+            progreso = round((order.items_completados / order.total_items) * 100, 2)
         
         order_data = {
-            "id": row.id,
-            "numero_orden": row.numero_orden,
-            "cliente": row.cliente,
-            "nombre_cliente": row.nombre_cliente,
-            "total_items": row.total_items,
-            "items_completados": row.items_completados,
+            "id": order.id,
+            "numero_orden": order.numero_orden,
+            "cliente": order.cliente,
+            "nombre_cliente": order.nombre_cliente,
+            "total_items": order.total_items,  # hybrid_property calculada
+            "items_completados": order.items_completados,  # hybrid_property calculada
             "progreso": progreso,
-            "operario_asignado": row.operario_nombre if row.operario_nombre else "Sin asignar",
-            "prioridad": row.prioridad,
-            "estado": row.estado,
-            "estado_codigo": row.estado_codigo,
-            "fecha_orden": row.fecha_orden,
-            "fecha_importacion": row.fecha_importacion
+            "operario_asignado": order.operator.nombre if order.operator else "Sin asignar",
+            "prioridad": order.prioridad,
+            "estado": order.status.nombre if order.status else "Desconocido",
+            "estado_codigo": order.status.codigo if order.status else "UNKNOWN",
+            "fecha_orden": order.fecha_orden,
+            "fecha_importacion": order.fecha_importacion
         }
         orders.append(OrderListItem(**order_data))
     

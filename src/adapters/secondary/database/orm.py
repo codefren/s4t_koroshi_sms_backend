@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, Text, DateTime, Date, ForeignKey, JSON, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Float, Boolean, Text, DateTime, Date, ForeignKey, JSON, UniqueConstraint, Index, func, select
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
 from datetime import datetime, timezone
@@ -232,16 +232,9 @@ class Order(Base):
         index=True
     )
     
-    # === CONTADORES (desnormalizados para performance) ===
-    # Total de UNIDADES solicitadas en la orden (suma de cantidad_solicitada de todas las líneas)
-    # Ejemplo: 3 líneas con cantidades [5, 10, 3] = total_items: 18
-    # Se calcula al importar y evita hacer SUM(cantidad_solicitada) constantemente
-    total_items = Column(Integer, default=0, nullable=False)
-    
-    # Cuántas UNIDADES han sido servidas hasta ahora (suma de cantidad_servida de todas las líneas)
-    # Ejemplo: 3 líneas con cantidades servidas [5, 7, 3] = items_completados: 15
-    # Permite calcular progreso rápidamente: items_completados/total_items * 100
-    items_completados = Column(Integer, default=0, nullable=False)
+    # === CONTADORES (calculados dinámicamente) ===
+    # NOTA: total_items e items_completados ahora son propiedades calculadas
+    # Se definen como @hybrid_property después de las relationships
     
     # === METADATOS ===
     # Notas o comentarios adicionales sobre la orden
@@ -272,6 +265,53 @@ class Order(Base):
         Index('idx_status_fecha', 'status_id', 'fecha_orden'),
         Index('idx_fecha_importacion', 'fecha_importacion'),
     )
+
+    # === PROPIEDADES CALCULADAS DINÁMICAMENTE ===
+    
+    @hybrid_property
+    def total_items(self):
+        """
+        Total de UNIDADES solicitadas en la orden (suma de cantidad_solicitada de todas las líneas).
+        Calculado dinámicamente desde order_lines.
+        
+        Ejemplo: 3 líneas con cantidades [5, 10, 3] = total_items: 18
+        """
+        if not self.order_lines:
+            return 0
+        return sum(line.cantidad_solicitada for line in self.order_lines)
+    
+    @total_items.expression
+    def total_items(cls):
+        """Expresión SQL para usar en queries con total_items."""
+        return (
+            select(func.coalesce(func.sum(OrderLine.cantidad_solicitada), 0))
+            .where(OrderLine.order_id == cls.id)
+            .correlate_except(OrderLine)
+            .scalar_subquery()
+        )
+    
+    @hybrid_property
+    def items_completados(self):
+        """
+        Cuántas UNIDADES han sido servidas hasta ahora (suma de cantidad_servida de todas las líneas).
+        Calculado dinámicamente desde order_lines.
+        
+        Ejemplo: 3 líneas con cantidades servidas [5, 7, 3] = items_completados: 15
+        Permite calcular progreso rápidamente: items_completados/total_items * 100
+        """
+        if not self.order_lines:
+            return 0
+        return sum(line.cantidad_servida for line in self.order_lines)
+    
+    @items_completados.expression
+    def items_completados(cls):
+        """Expresión SQL para usar en queries con items_completados."""
+        return (
+            select(func.coalesce(func.sum(OrderLine.cantidad_servida), 0))
+            .where(OrderLine.order_id == cls.id)
+            .correlate_except(OrderLine)
+            .scalar_subquery()
+        )
 
 
 class PackingBox(Base):
