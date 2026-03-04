@@ -11,8 +11,8 @@ from datetime import datetime
 from sqlalchemy import case
 
 from .manager import manager
-from ...secondary.database.orm import Operator, Order, OrderLine, OrderLineBoxDistribution, PackingBox, ReplenishmentRequest, ProductLocation, StockMovement
-from ...secondary.database.config import ALMACEN_PICKING_ID, ALMACEN_REPOSICION_ID, SessionLocal
+from src.adapters.secondary.database.orm import Operator, Order, OrderLine, OrderLineBoxDistribution, PackingBox, ReplenishmentRequest, ProductLocation, StockMovement
+from src.adapters.secondary.database.config import ALMACEN_PICKING_ID, ALMACEN_REPOSICION_ID, SessionLocal
 
 
 router = APIRouter()

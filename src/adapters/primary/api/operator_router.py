@@ -6,12 +6,12 @@ from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import datetime
 
-from ...secondary.database.config import get_db, ALMACEN_PICKING_ID
-from ...secondary.database.orm import (
+from src.adapters.secondary.database.config import get_db, ALMACEN_PICKING_ID
+from src.adapters.secondary.database.orm import (
     Operator, Order, OrderStatus, OrderLine, OrderHistory, 
     PackingBox, ProductLocation, ProductReference
 )
-from ...core.domain.models import (
+from src.core.domain.models import (
     OperatorResponse,
     OperatorCreate,
     OperatorUpdate
