@@ -729,22 +729,67 @@ def batch_update_order(
         if response.status_code != 201:
             db.rollback()
             logger.error(f"External Packing API returned {response.status_code}")
+            
+            # Extract error message from external API response
+            error_message = "Unknown error from external API"
+            if isinstance(external_api_response, dict):
+                error_message = external_api_response.get('error', external_api_response.get('message', str(external_api_response)))
+            
+            logger.info(f"External Packing API error response: {external_api_response}")
+            
+            # Return properly formatted error response matching BatchUpdateOrderResponse schema
+            return BatchUpdateOrderResponse(
+                status="error",
+                message=f"External API error: {error_message}",
+                order_number=order.numero_orden,
+                order_status="PENDING",
+                lines_updated=len(sku_quantities),
+                lines_completed=lines_completed,
+                lines_partial=lines_partial,
+                lines_pending=lines_pending
+            )
         else:
+            # Success - mark order as READY and commit
             ready_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'READY').first()
             if ready_status:
                 order.status_id = ready_status.id
             logger.info("External Packing API returned 201 - Success!")
             db.commit()
         
-        # Always return external API response
-        logger.info(f"External Packing API response: {external_api_response}")
-        return external_api_response
+        logger.info(f"External Packing API success response: {external_api_response}")
         
     except requests.exceptions.RequestException as e:
         db.rollback()
         error_msg = f"Error conectando con API externo de Packing: {str(e)}"
         logger.error(f"Network error: {error_msg}")
-        return {"status": False, "error": error_msg}
+        
+        # Return properly formatted error response
+        return BatchUpdateOrderResponse(
+            status="error",
+            message=error_msg,
+            order_number=order.numero_orden,
+            order_status="PENDING",
+            lines_updated=len(sku_quantities),
+            lines_completed=lines_completed,
+            lines_partial=lines_partial,
+            lines_pending=lines_pending
+        )
+    
+    # 9. Get final order status for success response
+    current_status = db.query(OrderStatus).filter(OrderStatus.id == order.status_id).first()
+    order_status_code = current_status.codigo if current_status else "PENDING"
+    
+    # 10. Return success response with proper schema
+    return BatchUpdateOrderResponse(
+        status="success",
+        message=f"Updated {len(sku_quantities)} lines for order {order.numero_orden}",
+        order_number=order.numero_orden,
+        order_status=order_status_code,
+        lines_updated=len(sku_quantities),
+        lines_completed=lines_completed,
+        lines_partial=lines_partial,
+        lines_pending=lines_pending
+    )
 
 
 
