@@ -175,7 +175,7 @@ class StockReservationCronService:
         
         Prioriza por:
         1. Prioridad de ubicación (menor = más prioritaria)
-        2. Stock disponible (mayor primero)
+        2. Stock disponible (MENOR primero - optimiza rotación)
         """
         locations = (
             self.db.query(ProductLocation)
@@ -186,7 +186,7 @@ class StockReservationCronService:
             )
             .order_by(
                 ProductLocation.prioridad.asc(),
-                ProductLocation.stock_actual.desc()
+                ProductLocation.stock_actual.asc()
             )
             .all()
         )
