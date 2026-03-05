@@ -114,6 +114,19 @@ class OperatorResponse(OperatorBase):
     updated_at: Optional[datetime] = None
 
 
+class OrderStatsResponse(BaseModel):
+    """Modelo de respuesta para estadísticas de órdenes."""
+    total: int = Field(description="Total de órdenes")
+    pending: int = Field(description="Órdenes pendientes (PENDING)")
+    assigned: int = Field(description="Órdenes asignadas (ASSIGNED)")
+    in_picking: int = Field(description="Órdenes en picking (IN_PICKING)")
+    picked: int = Field(description="Órdenes pickeadas (PICKED)")
+    packing: int = Field(description="Órdenes en empaque (PACKING)")
+    ready: int = Field(description="Órdenes listas (READY)")
+    shipped: int = Field(description="Órdenes enviadas (SHIPPED)")
+    cancelled: int = Field(description="Órdenes canceladas (CANCELLED)")
+
+
 class AssignOperatorRequest(BaseModel):
     """Modelo para solicitud de asignación de operario a orden."""
     operator_id: int = Field(description="ID del operario a asignar")

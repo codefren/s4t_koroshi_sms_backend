@@ -4,7 +4,7 @@ Router para gestión de órdenes.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, date
 
 from src.adapters.secondary.database.config import get_db
 from src.adapters.secondary.database.orm import (
@@ -26,6 +26,7 @@ from src.core.domain.models import (
     OrderListItem, 
     OrderDetailFull, 
     OrderProductDetail,
+    OrderStatsResponse,
     AssignOperatorRequest,
     UpdateOrderStatusRequest,
     UpdateOrderPriorityRequest,
@@ -44,6 +45,9 @@ def list_orders(
     limit: int = Query(100, ge=1, le=500, description="Número máximo de registros a retornar"),
     prioridad: Optional[str] = Query(None, description="Filtrar por prioridad (NORMAL, HIGH, URGENT)"),
     estado_codigo: Optional[str] = Query(None, description="Filtrar por código de estado"),
+    almacen_id: Optional[int] = Query(None, description="Filtrar por ID de almacén"),
+    fecha_desde: Optional[date] = Query(None, description="Filtrar órdenes desde esta fecha (fecha_orden)"),
+    fecha_hasta: Optional[date] = Query(None, description="Filtrar órdenes hasta esta fecha (fecha_orden)"),
     db: Session = Depends(get_db)
 ):
     """
@@ -58,6 +62,7 @@ def list_orders(
     - Operario asignado (o "Sin asignar")
     - Prioridad
     - Estado
+    - Almacén (opcional)
     """
     # Query base - obtener instancias completas de Order con relaciones
     query = db.query(Order).options(
@@ -72,6 +77,15 @@ def list_orders(
     
     if estado_codigo:
         query = query.join(OrderStatus).filter(OrderStatus.codigo == estado_codigo.upper())
+    
+    if almacen_id:
+        query = query.filter(Order.almacen_id == almacen_id)
+    
+    if fecha_desde:
+        query = query.filter(Order.fecha_orden >= fecha_desde)
+    
+    if fecha_hasta:
+        query = query.filter(Order.fecha_orden <= fecha_hasta)
     
     # Ordenar por fecha de importación descendente (más recientes primero)
     query = query.order_by(Order.fecha_importacion.desc())
@@ -108,6 +122,67 @@ def list_orders(
         orders.append(OrderListItem(**order_data))
     
     return orders
+
+
+@router.get("/stats/summary", response_model=OrderStatsResponse)
+def get_orders_stats(
+    almacen_id: Optional[int] = Query(None, description="Filtrar por ID de almacén"),
+    fecha_desde: Optional[date] = Query(None, description="Filtrar desde esta fecha (fecha_orden)"),
+    fecha_hasta: Optional[date] = Query(None, description="Filtrar hasta esta fecha (fecha_orden)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Obtiene estadísticas y contadores de órdenes agrupadas por estado.
+    
+    **Retorna:**
+    - Total de órdenes
+    - Contadores por cada estado (PENDING, ASSIGNED, IN_PICKING, PICKED, PACKING, READY, SHIPPED, CANCELLED)
+    
+    **Filtros opcionales:**
+    - almacen_id: Filtrar por almacén específico
+    - fecha_desde: Filtrar órdenes desde esta fecha
+    - fecha_hasta: Filtrar órdenes hasta esta fecha
+    """
+    from sqlalchemy import func, case
+    
+    # Query base
+    query = db.query(Order).join(OrderStatus, Order.status_id == OrderStatus.id)
+    
+    # Aplicar filtros opcionales
+    if almacen_id:
+        query = query.filter(Order.almacen_id == almacen_id)
+    
+    if fecha_desde:
+        query = query.filter(Order.fecha_orden >= fecha_desde)
+    
+    if fecha_hasta:
+        query = query.filter(Order.fecha_orden <= fecha_hasta)
+    
+    # Calcular estadísticas con agregación
+    stats = db.query(
+        func.count(Order.id).label('total'),
+        func.sum(case((OrderStatus.codigo == 'PENDING', 1), else_=0)).label('pending'),
+        func.sum(case((OrderStatus.codigo == 'ASSIGNED', 1), else_=0)).label('assigned'),
+        func.sum(case((OrderStatus.codigo == 'IN_PICKING', 1), else_=0)).label('in_picking'),
+        func.sum(case((OrderStatus.codigo == 'PICKED', 1), else_=0)).label('picked'),
+        func.sum(case((OrderStatus.codigo == 'PACKING', 1), else_=0)).label('packing'),
+        func.sum(case((OrderStatus.codigo == 'READY', 1), else_=0)).label('ready'),
+        func.sum(case((OrderStatus.codigo == 'SHIPPED', 1), else_=0)).label('shipped'),
+        func.sum(case((OrderStatus.codigo == 'CANCELLED', 1), else_=0)).label('cancelled')
+    ).select_from(query.subquery()).first()
+    
+    # Construir respuesta
+    return OrderStatsResponse(
+        total=stats.total or 0,
+        pending=stats.pending or 0,
+        assigned=stats.assigned or 0,
+        in_picking=stats.in_picking or 0,
+        picked=stats.picked or 0,
+        packing=stats.packing or 0,
+        ready=stats.ready or 0,
+        shipped=stats.shipped or 0,
+        cancelled=stats.cancelled or 0
+    )
 
 
 @router.get("/{order_id}", response_model=OrderDetailFull)
