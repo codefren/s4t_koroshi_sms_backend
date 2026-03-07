@@ -313,11 +313,8 @@ async def handle_scan_product(
         elif line.cantidad_servida > 0:
             line.estado = "PARTIAL"
         
-        # 7. Incrementar contador de items completados de la orden
-        # Incrementamos directamente en lugar de recalcular con SUM para evitar race conditions
-        order.items_completados += 1
-        
-        # 8. Guardar cambios
+        # 7. Guardar cambios
+        # NOTA: items_completados se calcula automáticamente desde order_lines (hybrid_property)
         db.commit()
         
         # 9. Calcular progreso

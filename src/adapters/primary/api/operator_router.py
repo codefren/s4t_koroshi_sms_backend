@@ -3,6 +3,7 @@ Router para gestión de operarios.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import case
 from typing import List, Optional
 from datetime import datetime
 
@@ -231,11 +232,20 @@ def list_operator_orders(
         )
     
     # Obtener órdenes asignadas al operario
+    # Ordenar por prioridad (URGENT → HIGH → NORMAL → LOW) y luego por fecha de creación
+    priority_order = case(
+        (Order.prioridad == 'URGENT', 1),
+        (Order.prioridad == 'HIGH', 2),
+        (Order.prioridad == 'NORMAL', 3),
+        (Order.prioridad == 'LOW', 4),
+        else_=5
+    )
+    
     orders = db.query(Order).filter(
         Order.operator_id == operator.id
     ).filter(
         Order.status_id.in_([2, 3])
-    ).order_by(Order.created_at.desc()).all()
+    ).order_by(priority_order.asc(), Order.created_at.desc()).all()
     
     # Formatear respuesta
     result = []
@@ -247,6 +257,7 @@ def list_operator_orders(
             "estado": order.status.codigo if order.status else None,
             "total_items": order.total_items,
             "items_completados": order.items_completados,
+            "nombre_cliente": order.nombre_cliente,
             "progreso": round((order.items_completados / order.total_items * 100) if order.total_items > 0 else 0, 2),
             "fecha_asignacion": order.fecha_asignacion.isoformat() if order.fecha_asignacion else None,
             "created_at": order.created_at.isoformat()
@@ -280,7 +291,8 @@ def get_order_summary(
     
     order = db.query(Order).options(
         joinedload(Order.order_lines),
-        joinedload(Order.status)
+        joinedload(Order.status),
+        joinedload(Order.caja_activa)
     ).filter(Order.id == order_id).first()
     
     if not order:
@@ -299,6 +311,17 @@ def get_order_summary(
     total_servido = sum(line.cantidad_servida for line in order.order_lines)
     progreso = round((total_servido / total_solicitado * 100) if total_solicitado > 0 else 0, 2)
     
+    # Obtener información de la caja activa si existe
+    caja_activa = None
+    if order.caja_activa:
+        caja_activa = {
+            "id": order.caja_activa.id,
+            "numero_caja": order.caja_activa.numero_caja,
+            "codigo_caja": order.caja_activa.codigo_caja,
+            "estado": order.caja_activa.estado,
+            "total_items": order.caja_activa.total_items
+        }
+    
     return {
         "order_id": order.id,
         "numero_orden": order.numero_orden,
@@ -307,7 +330,8 @@ def get_order_summary(
         "total_servido": total_servido,
         "fecha_asignacion": order.fecha_asignacion.isoformat() if order.fecha_asignacion else None,
         "prioridad": order.prioridad,
-        "progreso": progreso
+        "progreso": progreso,
+        "caja_activa": caja_activa
     }
 
 
