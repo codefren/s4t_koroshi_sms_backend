@@ -296,6 +296,8 @@ class OrderDetailFull(BaseModel):
     fecha_creacion: date = Field(description="Fecha de creación de la orden")
     fecha_limite: Optional[str] = Field(default="Sin fecha límite", description="Fecha límite de la orden")
     total_cajas: str = Field(description="Total de cajas o 'Sin cajas'")
+    caja_activa_id: Optional[int] = Field(None, description="ID de la caja actualmente abierta")
+    caja_activa_codigo: Optional[str] = Field(None, description="Código de la caja actualmente abierta")
     operario_asignado: str = Field(description="Nombre del operario o 'Sin operario'")
     estado: str = Field(description="Nombre del estado")
     estado_codigo: str = Field(description="Código del estado")

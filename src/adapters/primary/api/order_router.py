@@ -265,6 +265,15 @@ def get_order_detail(
     # total cajas
     total_cajas_str = f"{num_cajas} caja{'s' if num_cajas != 1 else ''}" if num_cajas > 0 else "Sin cajas"
     
+    # Obtener información de caja activa
+    caja_activa_id = None
+    caja_activa_codigo = None
+    if order.caja_activa_id:
+        active_box = db.query(PackingBox).filter(PackingBox.id == order.caja_activa_id).first()
+        if active_box:
+            caja_activa_id = active_box.id
+            caja_activa_codigo = active_box.codigo_caja
+    
     # Construir respuesta
     order_detail = OrderDetailFull(
         id=order.id,
@@ -274,6 +283,8 @@ def get_order_detail(
         fecha_creacion=order.fecha_orden,
         fecha_limite="Sin fecha límite",
         total_cajas=total_cajas_str,
+        caja_activa_id=caja_activa_id,
+        caja_activa_codigo=caja_activa_codigo,
         operario_asignado=operator.nombre if operator else "Sin operario",
         estado=status.nombre if status else "Desconocido",
         estado_codigo=status.codigo if status else "UNKNOWN",
@@ -388,6 +399,7 @@ def update_order_status(
     - `PENDING` - Pendiente
     - `ASSIGNED` - Asignada
     - `IN_PICKING` - En Picking
+    - `STOPPED` - Detenida (pausada durante picking)
     - `PICKED` - Picking Completado
     - `PACKING` - En Empaque
     - `READY` - Lista para Envío
@@ -397,9 +409,10 @@ def update_order_status(
     **Acciones:**
     - Actualiza el estado de la orden
     - Registra fechas según el estado:
-      - `IN_PICKING`: Registra fecha_inicio_picking
+      - `IN_PICKING`: Registra fecha_inicio_picking (si viene de PENDING, ASSIGNED o STOPPED)
       - `PICKED`: Registra fecha_fin_picking
     - Crea entrada en el historial
+    - **Nota:** STOPPED permite pausar una orden durante el picking y retomarla después
     
     **Retorna:**
     - Detalle completo de la orden actualizada
@@ -418,7 +431,7 @@ def update_order_status(
     if not new_status:
         raise HTTPException(
             status_code=400,
-            detail=f"Estado '{request.estado_codigo}' no es válido. Estados válidos: PENDING, ASSIGNED, IN_PICKING, PICKED, PACKING, READY, SHIPPED, CANCELLED"
+            detail=f"Estado '{request.estado_codigo}' no es válido. Estados válidos: PENDING, ASSIGNED, IN_PICKING, STOPPED, PICKED, PACKING, READY, SHIPPED, CANCELLED"
         )
     
     # Guardar estado anterior
@@ -779,11 +792,11 @@ def start_picking_with_box(
     # 2. Validar estado
     status = db.query(OrderStatus).filter(OrderStatus.id == order.status_id).first()
     logger.info(f"START-PICKING: Orden {order_id} estado: {status.codigo}")
-    if status.codigo != "ASSIGNED" and status.codigo != "IN_PICKING":
+    if status.codigo not in ["ASSIGNED", "IN_PICKING", "STOPPED"]:
         logger.error(f"START-PICKING ERROR: Estado inválido {status.codigo}")
         raise HTTPException(
             status_code=400,
-            detail=f"Solo se puede iniciar picking desde estado ASSIGNED o IN_PICKING. Estado actual: {status.codigo}"
+            detail=f"Solo se puede iniciar picking desde estado ASSIGNED, IN_PICKING o STOPPED (retomar). Estado actual: {status.codigo}"
         )
     
     # 3. Validar operario asignado
@@ -806,7 +819,9 @@ def start_picking_with_box(
     old_status_id = order.status_id
     if order.status_id != in_picking_status.id:
         order.status_id = in_picking_status.id
-        order.fecha_inicio_picking = datetime.utcnow()
+        # Solo establecer fecha_inicio_picking si no existe (primera vez, no retomando)
+        if not order.fecha_inicio_picking:
+            order.fecha_inicio_picking = datetime.utcnow()
     
     # 5. Validar y procesar código de caja escaneado
     codigo_caja = request.codigo_caja
@@ -819,7 +834,32 @@ def start_picking_with_box(
             # Verificar si está intentando escanear la misma caja (retomar picking)
             if current_active_box.codigo_caja == codigo_caja:
                 logger.info(f"START-PICKING: Retomando picking con la misma caja activa {order.caja_activa_id}")
-                # Retornar directamente - ya está todo configurado
+                
+                # Registrar en historial si cambió de estado (ej: STOPPED -> IN_PICKING)
+                if old_status_id != in_picking_status.id:
+                    old_status = db.query(OrderStatus).filter(OrderStatus.id == old_status_id).first()
+                    history_resume = OrderHistory(
+                        order_id=order_id,
+                        status_id=in_picking_status.id,
+                        operator_id=order.operator_id,
+                        accion="STATUS_CHANGE",
+                        status_anterior=old_status_id,
+                        status_nuevo=in_picking_status.id,
+                        notas=f"Picking retomado. Estado cambiado de {old_status.codigo if old_status else 'N/A'} a IN_PICKING",
+                        fecha=datetime.utcnow(),
+                        event_metadata={
+                            "resumed": True,
+                            "caja_activa_id": current_active_box.id,
+                            "codigo_caja": codigo_caja
+                        }
+                    )
+                    db.add(history_resume)
+                
+                # Hacer commit de cambios
+                db.commit()
+                db.refresh(order)
+                
+                # Retornar - ya está todo configurado
                 total_cajas = db.query(PackingBox).filter(PackingBox.order_id == order_id).count()
                 return {
                     "success": True,

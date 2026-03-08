@@ -222,6 +222,7 @@ def list_operator_orders(
     
     **Retorna:**
     - Lista de órdenes con información básica
+    - **Ordenamiento:** STOPPED primero, luego por prioridad (URGENT → HIGH → NORMAL), luego por fecha
     """
     # Buscar operario por código
     operator = db.query(Operator).filter(Operator.codigo == operator_codigo).first()
@@ -232,7 +233,21 @@ def list_operator_orders(
         )
     
     # Obtener órdenes asignadas al operario
-    # Ordenar por prioridad (URGENT → HIGH → NORMAL → LOW) y luego por fecha de creación
+    # Ordenar: STOPPED primero, luego por prioridad (URGENT → HIGH → NORMAL → LOW), luego por fecha de creación
+    
+    # Obtener IDs de estados válidos (ASSIGNED, IN_PICKING, STOPPED)
+    valid_statuses = db.query(OrderStatus.id).filter(
+        OrderStatus.codigo.in_(['ASSIGNED', 'IN_PICKING', 'STOPPED'])
+    ).all()
+    valid_status_ids = [s.id for s in valid_statuses]
+    
+    # Ordenamiento: STOPPED primero
+    stopped_first = case(
+        (OrderStatus.codigo == 'STOPPED', 0),
+        else_=1
+    )
+    
+    # Ordenamiento: prioridad
     priority_order = case(
         (Order.prioridad == 'URGENT', 1),
         (Order.prioridad == 'HIGH', 2),
@@ -241,11 +256,15 @@ def list_operator_orders(
         else_=5
     )
     
-    orders = db.query(Order).filter(
+    orders = db.query(Order).join(OrderStatus).filter(
         Order.operator_id == operator.id
     ).filter(
-        Order.status_id.in_([2, 3])
-    ).order_by(priority_order.asc(), Order.created_at.desc()).all()
+        Order.status_id.in_(valid_status_ids)
+    ).order_by(
+        stopped_first.asc(),
+        priority_order.asc(),
+        Order.created_at.desc()
+    ).all()
     
     # Formatear respuesta
     result = []
@@ -490,10 +509,10 @@ def start_picking(
         }
     
     # Si no está en estado válido para iniciar picking
-    if order.status.codigo not in ["PENDING", "ASSIGNED"]:
+    if order.status.codigo not in ["PENDING", "ASSIGNED", "STOPPED"]:
         raise HTTPException(
             status_code=400,
-            detail=f"No se puede iniciar picking. Estado actual: {order.status.codigo}"
+            detail=f"No se puede iniciar picking. Estado actual: {order.status.codigo}. Estados válidos: PENDING, ASSIGNED, STOPPED"
         )
     
     # Cambiar estado a IN_PICKING
@@ -507,14 +526,36 @@ def start_picking(
             detail="Estado IN_PICKING no encontrado en el sistema"
         )
     
+    # Guardar estado anterior para historial
+    old_status_id = order.status_id
+    old_status = db.query(OrderStatus).filter(OrderStatus.id == old_status_id).first()
+    
     order.status_id = in_picking_status.id
-    order.fecha_inicio_picking = datetime.utcnow()
+    # Solo establecer fecha_inicio_picking si no existe (primera vez, no retomando desde STOPPED)
+    if not order.fecha_inicio_picking:
+        order.fecha_inicio_picking = datetime.utcnow()
+    
+    # Registrar cambio de estado en historial
+    history = OrderHistory(
+        order_id=order.id,
+        status_id=in_picking_status.id,
+        operator_id=operator.id,
+        accion="STATUS_CHANGE",
+        status_anterior=old_status_id,
+        status_nuevo=in_picking_status.id,
+        notas=f"Picking {'retomado' if old_status and old_status.codigo == 'STOPPED' else 'iniciado'}. Estado cambiado de {old_status.codigo if old_status else 'N/A'} a IN_PICKING",
+        fecha=datetime.utcnow(),
+        event_metadata={
+            "resumed": old_status and old_status.codigo == "STOPPED"
+        }
+    )
+    db.add(history)
     
     db.commit()
     db.refresh(order)
     
     return {
-        "message": "Picking iniciado correctamente",
+        "message": f"Picking {'retomado' if old_status and old_status.codigo == 'STOPPED' else 'iniciado'} correctamente",
         "order_id": order.id,
         "numero_orden": order.numero_orden,
         "estado": order.status.codigo,

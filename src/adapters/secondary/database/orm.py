@@ -258,7 +258,7 @@ class Order(Base):
     # Relación con cajas de embalaje
     packing_boxes = relationship("PackingBox", back_populates="order", cascade="all, delete-orphan", foreign_keys="[PackingBox.order_id]")
     # Caja actualmente abierta (relación especial, sin cascade)
-    caja_activa = relationship("PackingBox", foreign_keys=[caja_activa_id], post_update=True)
+    caja_activa = relationship("PackingBox", foreign_keys=[caja_activa_id], post_update=True, uselist=False, lazy="joined")
 
     __table_args__ = (
         Index('idx_status_operator', 'status_id', 'operator_id'),

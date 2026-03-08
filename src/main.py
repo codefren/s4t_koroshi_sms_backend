@@ -16,6 +16,7 @@ from src.adapters.primary.api.product_router import router as product_router
 from src.adapters.primary.api.packing_boxes_router import router as packing_boxes_router
 from src.adapters.primary.api.replenishment_router import router as replenishment_router
 from src.adapters.primary.api.almacen_router import router as almacen_router
+from src.adapters.primary.api.stock_movement_router import router as stock_movement_router
 from src.adapters.primary.api.websockets import ws_router
 from src.adapters.primary.websocket.operator_websocket import router as operator_ws_router
 from src.api_service.routes import router as api_service_router
@@ -75,6 +76,7 @@ app.include_router(product_router, prefix="/api/v1")
 app.include_router(packing_boxes_router, prefix="/api/v1")
 app.include_router(replenishment_router, prefix="/api/v1")
 app.include_router(almacen_router, prefix="/api/v1")
+app.include_router(stock_movement_router, prefix="/api/v1")
 app.include_router(ws_router)
 app.include_router(operator_ws_router, tags=["WebSocket PDA"])
 app.include_router(api_service_router, prefix="/api/service", tags=["B2B Service API"])
@@ -93,7 +95,8 @@ def root():
             "operators": "/api/v1/operators",
             "products": "/api/v1/products",
             "packing_boxes": "/api/v1/packing-boxes",
-            "replenishment": "/api/v1/replenishment"
+            "replenishment": "/api/v1/replenishment",
+            "stock_movements": "/api/v1/stock-movements"
         }
     }
 
