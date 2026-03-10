@@ -3,7 +3,7 @@ Router para consulta de movimientos de stock.
 """
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from typing import List, Optional
 from datetime import datetime, date
 
@@ -11,49 +11,11 @@ from src.adapters.secondary.database.config import get_db
 from src.adapters.secondary.database.orm import (
     StockMovement, ProductLocation, ProductReference, Order, OrderLine
 )
-from pydantic import BaseModel, ConfigDict, Field
-
-# ============================================================================
-# MODELOS PYDANTIC
-# ============================================================================
-
-class StockMovementResponse(BaseModel):
-    """Modelo de respuesta para movimiento de stock."""
-    model_config = ConfigDict(from_attributes=True)
-    
-    id: int
-    tipo: str = Field(description="Tipo: RESERVE, DEDUCT, RELEASE, ADJUSTMENT, MOVE_OUT, MOVE_IN")
-    cantidad: int = Field(description="Cantidad del movimiento (+ o -)")
-    stock_antes: int = Field(description="Stock antes del movimiento")
-    stock_despues: int = Field(description="Stock después del movimiento")
-    notas: Optional[str] = Field(None, description="Notas del movimiento")
-    created_at: datetime = Field(description="Fecha y hora del movimiento")
-    
-    # Datos del producto
-    producto_sku: Optional[str] = Field(None, description="SKU del producto")
-    producto_nombre: Optional[str] = Field(None, description="Nombre del producto")
-    producto_color: Optional[str] = Field(None, description="Color del producto")
-    producto_talla: Optional[str] = Field(None, description="Talla del producto")
-    
-    # Datos de ubicación
-    ubicacion_codigo: Optional[str] = Field(None, description="Código de ubicación")
-    
-    # Datos de orden (si aplica)
-    order_id: Optional[int] = Field(None, description="ID de orden relacionada")
-    numero_orden: Optional[str] = Field(None, description="Número de orden")
-    order_line_id: Optional[int] = Field(None, description="ID de línea de orden")
-
-
-class StockMovementListResponse(BaseModel):
-    """Respuesta con lista de movimientos y estadísticas."""
-    total: int = Field(description="Total de movimientos encontrados")
-    movimientos: List[StockMovementResponse] = Field(description="Lista de movimientos")
-    estadisticas: dict = Field(description="Estadísticas por tipo de movimiento")
-
-
-# ============================================================================
-# ROUTER
-# ============================================================================
+from src.core.domain.stock_movement_models import (
+    StockMovementResponse,
+    StockMovementListResponse,
+    StockMovementStatsSummary
+)
 
 router = APIRouter(prefix="/stock-movements", tags=["Stock Movements"])
 
@@ -157,8 +119,8 @@ def list_stock_movements(
     # Calcular estadísticas por tipo
     estadisticas_query = db.query(
         StockMovement.tipo,
-        db.func.count(StockMovement.id).label('count'),
-        db.func.sum(StockMovement.cantidad).label('total_cantidad')
+        func.count(StockMovement.id).label('count'),
+        func.sum(StockMovement.cantidad).label('total_cantidad')
     )
     
     if filters:
@@ -192,7 +154,7 @@ def list_movement_types(db: Session = Depends(get_db)):
     return [t[0] for t in tipos]
 
 
-@router.get("/stats/summary")
+@router.get("/stats/summary", response_model=StockMovementStatsSummary)
 def get_movement_stats_summary(
     fecha_desde: Optional[date] = Query(None, description="Fecha desde"),
     fecha_hasta: Optional[date] = Query(None, description="Fecha hasta"),
@@ -222,8 +184,8 @@ def get_movement_stats_summary(
     # Estadísticas por tipo
     stats = query.with_entities(
         StockMovement.tipo,
-        db.func.count(StockMovement.id).label('count'),
-        db.func.sum(StockMovement.cantidad).label('total_cantidad')
+        func.count(StockMovement.id).label('count'),
+        func.sum(StockMovement.cantidad).label('total_cantidad')
     ).group_by(StockMovement.tipo).all()
     
     stats_por_tipo = {}

@@ -1,8 +1,11 @@
 """
 Router para gestión de órdenes.
 """
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, case
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 
@@ -27,13 +30,18 @@ from src.core.domain.models import (
     OrderDetailFull, 
     OrderProductDetail,
     OrderStatsResponse,
+    OrderHistoryResponse,
     AssignOperatorRequest,
     UpdateOrderStatusRequest,
     UpdateOrderPriorityRequest,
     StartPickingRequest,
     OrderPackingDistribution,
     BoxDistribution,
-    ProductInBox
+    ProductInBox,
+    PickingRouteResponse,
+    StockValidationResponse,
+    StartPickingWithBoxResponse,
+    CompletePickingResponse
 )
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -48,6 +56,7 @@ def list_orders(
     almacen_id: Optional[int] = Query(None, description="Filtrar por ID de almacén"),
     fecha_desde: Optional[date] = Query(None, description="Filtrar órdenes desde esta fecha (fecha_orden)"),
     fecha_hasta: Optional[date] = Query(None, description="Filtrar órdenes hasta esta fecha (fecha_orden)"),
+    type: Optional[str] = Query(None, description="Filtrar por tipo de orden"),
     db: Session = Depends(get_db)
 ):
     """
@@ -86,6 +95,9 @@ def list_orders(
     
     if fecha_hasta:
         query = query.filter(Order.fecha_orden <= fecha_hasta)
+    
+    if type:
+        query = query.filter(Order.type == type)
     
     # Ordenar por fecha de importación descendente (más recientes primero)
     query = query.order_by(Order.fecha_importacion.desc())
@@ -143,8 +155,6 @@ def get_orders_stats(
     - fecha_desde: Filtrar órdenes desde esta fecha
     - fecha_hasta: Filtrar órdenes hasta esta fecha
     """
-    from sqlalchemy import func, case
-    
     # Query base
     query = db.query(Order).join(OrderStatus, Order.status_id == OrderStatus.id)
     
@@ -183,6 +193,38 @@ def get_orders_stats(
         shipped=stats.shipped or 0,
         cancelled=stats.cancelled or 0
     )
+
+
+@router.get("/{order_id}/history", response_model=List[OrderHistoryResponse])
+def list_order_history(
+    order_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Lista el historial completo de una orden específica.
+    
+    **Parámetros:**
+    - `order_id`: ID de la orden
+    
+    **Retorna:**
+    - Lista de eventos del historial de la orden
+    - Ordenados por fecha descendente (más recientes primero)
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Orden con ID {order_id} no encontrada"
+        )
+
+    history = db.query(OrderHistory).filter(
+        OrderHistory.order_id == order_id
+    ).order_by(
+        OrderHistory.fecha.desc(),
+        OrderHistory.created_at.desc()
+    ).all()
+
+    return history
 
 
 @router.get("/{order_id}", response_model=OrderDetailFull)
@@ -572,7 +614,7 @@ def update_order_priority(
     return get_order_detail(order_id, db)
 
 
-@router.post("/{order_id}/optimize-picking-route")
+@router.post("/{order_id}/optimize-picking-route", response_model=PickingRouteResponse)
 def optimize_picking_route(
     order_id: int,
     db: Session = Depends(get_db)
@@ -659,7 +701,7 @@ def optimize_picking_route(
     }
 
 
-@router.get("/{order_id}/stock-validation")
+@router.get("/{order_id}/stock-validation", response_model=StockValidationResponse)
 def validate_order_stock(
     order_id: int,
     db: Session = Depends(get_db)
@@ -743,7 +785,7 @@ def validate_order_stock(
 # WORKFLOW AUTOMATIZADO CON CAJAS DE EMBALAJE
 # ============================================================================
 
-@router.post("/{order_id}/start-picking")
+@router.post("/{order_id}/start-picking", response_model=StartPickingWithBoxResponse)
 def start_picking_with_box(
     order_id: int,
     request: StartPickingRequest,
@@ -768,7 +810,6 @@ def start_picking_with_box(
     - Información de la orden actualizada
     - Información de la caja #1 creada
     """
-    import logging
     logger = logging.getLogger(__name__)
     
     try:
@@ -1014,7 +1055,7 @@ def start_picking_with_box(
     }
 
 
-@router.post("/{order_id}/complete-picking")
+@router.post("/{order_id}/complete-picking", response_model=CompletePickingResponse)
 def complete_picking_with_boxes(
     order_id: int,
     db: Session = Depends(get_db)

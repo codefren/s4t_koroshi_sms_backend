@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 import math
 
-from src.adapters.secondary.database.config import SessionLocal
+from src.adapters.secondary.database.config import get_db
 from src.adapters.secondary.database.orm import (
     ReplenishmentRequest, ProductLocation, ProductReference, Operator
 )
@@ -22,20 +22,17 @@ from src.core.domain.replenishment_models import (
     StatusCounts,
     PriorityCounts,
     StartExecutionRequest,
-    RejectRequest
+    RejectRequest,
+    StartReplenishmentResponse,
+    CompleteReplenishmentResponse,
+    RejectReplenishmentResponse,
+    ReplenishmentRequestDetail,
+    ReplenishmentDiagnosticResponse
 )
 
 
 router = APIRouter(prefix="/replenishment", tags=["replenishment"])
 
-
-def get_db():
-    """Dependency for database session."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 def calculate_time_waiting(requested_at: datetime) -> str:
@@ -62,6 +59,8 @@ def list_replenishment_requests(
     solo_prioritarias: bool = Query(False, description="Solo URGENT y HIGH (para PDA). Ignora el filtro priority si está activo."),
     almacen_id: Optional[int] = Query(None, description="Filter by warehouse"),
     product_id: Optional[int] = Query(None, description="Filter by product"),
+    ubicacion: Optional[str] = Query(None, description="Filter by location code (origin or destination)"),
+    sku: Optional[str] = Query(None, description="Filter by product SKU"),
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
     db: Session = Depends(get_db)
@@ -75,6 +74,8 @@ def list_replenishment_requests(
     - `solo_prioritarias`: Solo URGENT y HIGH (para PDA)
     - `almacen_id`: Filter by warehouse
     - `product_id`: Filter by product
+    - `ubicacion`: Filter by location code (searches in origin or destination)
+    - `sku`: Filter by product SKU
     
     **Response:**
     - Paginated list of replenishment requests
@@ -120,6 +121,32 @@ def list_replenishment_requests(
     
     if product_id:
         query = query.filter(ReplenishmentRequest.product_id == product_id)
+    
+    # Filter by location code (origin or destination)
+    if ubicacion:
+        # Need to check both origin and destination locations
+        origin_loc_alias = aliased(ProductLocation)
+        dest_loc_alias = aliased(ProductLocation)
+        query = query.outerjoin(
+            origin_loc_alias,
+            ReplenishmentRequest.location_origen_id == origin_loc_alias.id
+        ).outerjoin(
+            dest_loc_alias,
+            ReplenishmentRequest.location_destino_id == dest_loc_alias.id
+        ).filter(
+            (origin_loc_alias.codigo_ubicacion.ilike(f"%{ubicacion}%")) |
+            (dest_loc_alias.codigo_ubicacion.ilike(f"%{ubicacion}%"))
+        )
+    
+    # Filter by SKU
+    if sku:
+        product_alias = aliased(ProductReference)
+        query = query.join(
+            product_alias,
+            ReplenishmentRequest.product_id == product_alias.id
+        ).filter(
+            product_alias.sku.ilike(f"%{sku}%")
+        )
     
     # Count total
     total = query.count()
@@ -196,7 +223,7 @@ def list_replenishment_requests(
     )
 
 
-@router.post("/requests/{request_id}/start")
+@router.post("/requests/{request_id}/start", response_model=StartReplenishmentResponse)
 def start_replenishment_execution(
     request_id: int,
     data: StartExecutionRequest,
@@ -267,7 +294,7 @@ def start_replenishment_execution(
     }
 
 
-@router.post("/requests/{request_id}/complete")
+@router.post("/requests/{request_id}/complete", response_model=CompleteReplenishmentResponse)
 def complete_replenishment(
     request_id: int,
     db: Session = Depends(get_db)
@@ -348,7 +375,7 @@ def complete_replenishment(
     }
 
 
-@router.post("/requests/{request_id}/reject")
+@router.post("/requests/{request_id}/reject", response_model=RejectReplenishmentResponse)
 def reject_replenishment(
     request_id: int,
     data: RejectRequest,
@@ -386,7 +413,7 @@ def reject_replenishment(
     }
 
 
-@router.get("/requests/{request_id}")
+@router.get("/requests/{request_id}", response_model=ReplenishmentRequestDetail)
 def get_replenishment_request(
     request_id: int,
     db: Session = Depends(get_db)
@@ -449,7 +476,7 @@ def get_replenishment_request(
     }
 
 
-@router.get("/diagnostic")
+@router.get("/diagnostic", response_model=ReplenishmentDiagnosticResponse)
 def replenishment_diagnostic(
     db: Session = Depends(get_db)
 ):
@@ -458,8 +485,6 @@ def replenishment_diagnostic(
     
     Muestra por qué ciertos productos con stock bajo NO tienen solicitud de reposición.
     """
-    from sqlalchemy import func
-    
     PICKING_WAREHOUSE_ID = 2
     REPLENISHMENT_WAREHOUSE_ID = 1
     
@@ -475,14 +500,14 @@ def replenishment_diagnostic(
     ).all()
     
     # 3. Ubicaciones con stock_minimo = 0 (ignoradas por el cron)
-    zero_minimum = db.query(func.count(ProductLocation.id)).filter(
+    zero_minimum = db.query(sa_func.count(ProductLocation.id)).filter(
         ProductLocation.almacen_id == PICKING_WAREHOUSE_ID,
         ProductLocation.activa == True,
         ProductLocation.stock_minimo == 0,
     ).scalar()
     
     # 4. Ubicaciones con stock_minimo NULL
-    null_minimum = db.query(func.count(ProductLocation.id)).filter(
+    null_minimum = db.query(sa_func.count(ProductLocation.id)).filter(
         ProductLocation.almacen_id == PICKING_WAREHOUSE_ID,
         ProductLocation.activa == True,
         ProductLocation.stock_minimo == None,
@@ -532,7 +557,7 @@ def replenishment_diagnostic(
         })
     
     # 6. Solicitudes activas
-    active_requests = db.query(func.count(ReplenishmentRequest.id)).filter(
+    active_requests = db.query(sa_func.count(ReplenishmentRequest.id)).filter(
         ReplenishmentRequest.status.in_(["WAITING_STOCK", "READY", "IN_PROGRESS"])
     ).scalar()
     

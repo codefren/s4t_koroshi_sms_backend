@@ -15,7 +15,13 @@ from src.adapters.secondary.database.orm import (
 from src.core.domain.models import (
     OperatorResponse,
     OperatorCreate,
-    OperatorUpdate
+    OperatorUpdate,
+    VerifyOperatorResponse,
+    OperatorOrderItem,
+    OrderSummaryResponse,
+    OrderLineListItem,
+    ResetOrderLineResponse,
+    OperatorStartPickingResponse
 )
 
 router = APIRouter(prefix="/operators", tags=["Operators"])
@@ -47,6 +53,46 @@ def list_operators(
     operators = query.all()
     
     return operators
+
+
+@router.get("/verify/{codigo}", response_model=VerifyOperatorResponse)
+def verify_operator_by_code(
+    codigo: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Verifica si existe un operario con el código especificado.
+    
+    **Parámetros:**
+    - `codigo`: Código del operario (ej: "21", "OP001", "OP002")
+    
+    **Retorna:**
+    - Información del operario si existe
+    - 404 si no existe
+    
+    **Ejemplo:**
+    ```
+    GET /api/v1/operators/verify/21
+    ```
+    """
+    operator = db.query(Operator).filter(Operator.codigo == codigo).first()
+    
+    if not operator:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Operario con código '{codigo}' no encontrado"
+        )
+    
+    return {
+        "exists": True,
+        "operator": {
+            "id": operator.id,
+            "codigo": operator.codigo,
+            "nombre": operator.nombre,
+            "activo": operator.activo,
+            "created_at": operator.created_at.isoformat() if operator.created_at else None
+        }
+    }
 
 
 @router.get("/{operator_id}", response_model=OperatorResponse)
@@ -209,7 +255,7 @@ def toggle_operator_status(
 # ENDPOINTS PARA GESTIÓN DE ÓRDENES DEL OPERARIO (PDA)
 # ============================================================================
 
-@router.get("/{operator_codigo}/orders")
+@router.get("/{operator_codigo}/orders", response_model=List[OperatorOrderItem])
 def list_operator_orders(
     operator_codigo: str,
     db: Session = Depends(get_db)
@@ -285,7 +331,7 @@ def list_operator_orders(
     return result
 
 
-@router.get("/{operator_codigo}/orders/{order_id}/summary")
+@router.get("/{operator_codigo}/orders/{order_id}/summary", response_model=OrderSummaryResponse)
 def get_order_summary(
     operator_codigo: str,
     order_id: int,
@@ -354,10 +400,11 @@ def get_order_summary(
     }
 
 
-@router.get("/{operator_codigo}/orders/{order_id}/lines")
+@router.get("/{operator_codigo}/orders/{order_id}/lines", response_model=List[OrderLineListItem])
 def list_order_lines(
     operator_codigo: str,
     order_id: int,
+    ultimos: Optional[bool] = Query(False, description="Si es true, retorna solo los últimos 3 registros actualizados"),
     db: Session = Depends(get_db)
 ):
     """
@@ -366,9 +413,12 @@ def list_order_lines(
     **Parámetros:**
     - `operator_codigo`: Código del operario (ej: "OP001", "OP002")
     - `order_id`: ID de la orden
+    - `ultimos`: (Opcional) Si es true, retorna solo los últimos 3 registros actualizados por fecha de actualización
     
     **Retorna:**
     - Lista de productos con cantidades y ubicaciones
+    - Si `ultimos=true`: Solo los últimos 3 registros actualizados (ordenados por updated_at desc)
+    - Si `ultimos=false` o no especificado: Todos los registros de la orden
     """
     # Buscar operario por código
     operator = db.query(Operator).filter(Operator.codigo == operator_codigo).first()
@@ -393,9 +443,15 @@ def list_order_lines(
         )
     
     # Obtener líneas de la orden
-    lines = db.query(OrderLine).filter(
+    query = db.query(OrderLine).filter(
         OrderLine.order_id == order_id
-    ).all()
+    )
+    
+    # Si se solicita solo los últimos 3 actualizados
+    if ultimos:
+        query = query.order_by(OrderLine.updated_at.desc()).limit(3)
+    
+    lines = query.all()
     
     # Formatear respuesta
     result = []
@@ -455,7 +511,109 @@ def list_order_lines(
     return result
 
 
-@router.post("/{operator_codigo}/orders/{order_id}/start-picking")
+@router.put("/{operator_codigo}/orders/{order_id}/lines/{order_line_id}/reset", response_model=ResetOrderLineResponse)
+def reset_order_line_quantity(
+    operator_codigo: str,
+    order_id: int,
+    order_line_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Resetea la cantidad servida de una línea de orden a 0.
+    
+    **Parámetros:**
+    - `operator_codigo`: Código del operario (ej: "OP001", "OP002")
+    - `order_id`: ID de la orden
+    - `order_line_id`: ID de la línea de orden a resetear
+    
+    **Acción:**
+    - Resetea `cantidad_servida` a 0
+    - Cambia el estado de la línea a 'PENDING'
+    - Registra el cambio en el historial
+    
+    **Retorna:**
+    - Información actualizada de la línea
+    """
+    # Buscar operario por código
+    operator = db.query(Operator).filter(Operator.codigo == operator_codigo).first()
+    if not operator:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Operario con código '{operator_codigo}' no encontrado"
+        )
+    
+    # Verificar que la orden existe y está asignada al operario
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Orden con ID {order_id} no encontrada"
+        )
+    
+    if order.operator_id != operator.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Esta orden no está asignada a este operario"
+        )
+    
+    # Verificar que la línea de orden existe y pertenece a la orden
+    order_line = db.query(OrderLine).filter(
+        OrderLine.id == order_line_id,
+        OrderLine.order_id == order_id
+    ).first()
+    
+    if not order_line:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Línea de orden con ID {order_line_id} no encontrada en la orden {order_id}"
+        )
+    
+    # Guardar valores anteriores para el historial
+    cantidad_servida_anterior = order_line.cantidad_servida
+    estado_anterior = order_line.estado
+    
+    # Resetear cantidad servida a 0 y cambiar estado a PENDING
+    order_line.cantidad_servida = 0
+    order_line.estado = 'PENDING'
+    
+    # Registrar cambio en el historial
+    history = OrderHistory(
+        order_id=order_id,
+        status_id=order.status_id,
+        operator_id=operator.id,
+        accion="LINE_RESET",
+        notas=f"Cantidad servida reseteada de {cantidad_servida_anterior} a 0. Estado cambiado de {estado_anterior} a PENDING",
+        fecha=datetime.utcnow(),
+        event_metadata={
+            "order_line_id": order_line_id,
+            "cantidad_servida_anterior": cantidad_servida_anterior,
+            "estado_anterior": estado_anterior,
+            "ean": order_line.ean
+        }
+    )
+    db.add(history)
+    
+    db.commit()
+    db.refresh(order_line)
+    
+    return {
+        "success": True,
+        "message": "Cantidad servida reseteada exitosamente",
+        "order_line": {
+            "id": order_line.id,
+            "order_id": order_line.order_id,
+            "ean": order_line.ean,
+            "cantidad_solicitada": order_line.cantidad_solicitada,
+            "cantidad_servida": order_line.cantidad_servida,
+            "cantidad_pendiente": order_line.cantidad_solicitada - order_line.cantidad_servida,
+            "estado": order_line.estado,
+            "cantidad_servida_anterior": cantidad_servida_anterior,
+            "estado_anterior": estado_anterior
+        }
+    }
+
+
+@router.post("/{operator_codigo}/orders/{order_id}/start-picking", response_model=OperatorStartPickingResponse)
 def start_picking(
     operator_codigo: str,
     order_id: int,
