@@ -119,6 +119,7 @@ def get_security_config() -> SecurityConfig:
             "127.0.0.0/8",    # IPv4 localhost range
             "172.20.10.9",    # Cliente PDA
             "192.168.1.0/24", # LAN completa
+            "82.223.131.45",  # Production server (IIS reverse proxy)
         ],
         
         # === IP BLACKLISTING (Optional) ===
