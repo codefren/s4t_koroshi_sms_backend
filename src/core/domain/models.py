@@ -659,3 +659,264 @@ class ProductLocationWithProduct(ProductLocationResponse):
         None,
         description="Información del producto en esta ubicación"
     )
+
+
+# ============================================================================
+# MODELOS DE RESPUESTA PARA ENDPOINTS DE OPERARIOS (PDA)
+# ============================================================================
+
+class OperatorBasicInfo(BaseModel):
+    """Información básica de un operario."""
+    id: int
+    codigo: str
+    nombre: str
+    activo: bool
+    created_at: Optional[str] = None
+
+
+class VerifyOperatorResponse(BaseModel):
+    """Respuesta para verificación de operario por código."""
+    exists: bool
+    operator: OperatorBasicInfo
+
+
+class OperatorOrderItem(BaseModel):
+    """Item de orden en la lista de órdenes del operario."""
+    id: int
+    numero_orden: str
+    prioridad: str
+    estado: Optional[str] = None
+    total_items: int
+    items_completados: int
+    nombre_cliente: Optional[str] = None
+    progreso: float
+    fecha_asignacion: Optional[str] = None
+    created_at: str
+
+
+class CajaActivaInfo(BaseModel):
+    """Información de caja activa."""
+    id: int
+    numero_caja: int
+    codigo_caja: str
+    estado: str
+    total_items: int
+
+
+class OrderSummaryResponse(BaseModel):
+    """Respuesta de resumen de orden para operario."""
+    order_id: int
+    numero_orden: str
+    estado: str
+    total_productos: int
+    total_servido: int
+    fecha_asignacion: Optional[str] = None
+    prioridad: str
+    progreso: float
+    caja_activa: Optional[CajaActivaInfo] = None
+
+
+class ProductoBasicInfo(BaseModel):
+    """Información básica de producto."""
+    nombre: Optional[str] = None
+    color: Optional[str] = None
+    talla: Optional[str] = None
+    sku: Optional[str] = None
+
+
+class UbicacionBasicInfo(BaseModel):
+    """Información básica de ubicación."""
+    codigo: Optional[str] = None
+    pasillo: Optional[str] = None
+    lado: Optional[str] = None
+    ubicacion: Optional[str] = None
+    altura: Optional[str] = None
+    stock_actual: Optional[int] = None
+    stock_minimo: Optional[int] = None
+
+
+class OrderLineListItem(BaseModel):
+    """Item de línea de orden para listado."""
+    id: int
+    producto_id: Optional[int] = None
+    ubicacion_id: Optional[int] = None
+    ean: Optional[str] = None
+    producto: Optional[ProductoBasicInfo] = None
+    ubicacion: Optional[UbicacionBasicInfo] = None
+    cantidad_solicitada: int
+    cantidad_servida: int
+    cantidad_pendiente: int
+    estado: str
+    progreso: float
+
+
+class ResetOrderLineInfo(BaseModel):
+    """Información de línea reseteada."""
+    id: int
+    order_id: int
+    ean: Optional[str] = None
+    cantidad_solicitada: int
+    cantidad_servida: int
+    cantidad_pendiente: int
+    estado: str
+    cantidad_servida_anterior: int
+    estado_anterior: str
+
+
+class ResetOrderLineResponse(BaseModel):
+    """Respuesta para reset de cantidad servida."""
+    success: bool
+    message: str
+    order_line: ResetOrderLineInfo
+
+
+class OperatorStartPickingResponse(BaseModel):
+    """Respuesta para inicio de picking desde PDA del operario."""
+    message: str
+    order_id: int
+    numero_orden: str
+    estado: str
+    fecha_inicio_picking: Optional[str] = None
+
+
+# ============================================================================
+# MODELOS DE RESPUESTA PARA ENDPOINTS DE ÓRDENES (WORKFLOW)
+# ============================================================================
+
+class PickingRouteStop(BaseModel):
+    """Parada en la ruta de picking."""
+    secuencia: int
+    order_line_id: int
+    producto: str
+    cantidad: int
+    ubicacion: str
+    pasillo: str
+    lado: Optional[str] = None
+    altura: Optional[str] = None
+    prioridad: Optional[int] = None
+    stock_disponible: Optional[int] = None
+
+
+class PickingRouteWarnings(BaseModel):
+    """Advertencias de la ruta de picking."""
+    lines_without_location: int
+    details: List[Dict[str, Any]]
+
+
+class PickingRouteResponse(BaseModel):
+    """Respuesta de optimización de ruta de picking."""
+    order_id: int
+    numero_orden: str
+    total_stops: int
+    aisles_to_visit: List[str]
+    estimated_time_minutes: float
+    picking_route: List[PickingRouteStop]
+    warnings: PickingRouteWarnings
+
+
+class StockIssue(BaseModel):
+    """Issue de stock encontrado en validación."""
+    type: str
+    message: str
+    severity: str
+
+
+class StockValidationLine(BaseModel):
+    """Resultado de validación de stock por línea."""
+    order_line_id: int
+    producto: str
+    cantidad_solicitada: int
+    stock_disponible: Optional[int] = None
+    ubicacion: Optional[str] = None
+    issues: List[StockIssue]
+    can_pick: bool
+
+
+class StockIssueSummary(BaseModel):
+    """Resumen de issues de stock."""
+    insufficient_stock: int
+    no_location: int
+    inactive_product: int
+    inactive_location: int
+
+
+class StockValidationResponse(BaseModel):
+    """Respuesta de validación de stock de una orden."""
+    order_id: int
+    numero_orden: str
+    can_complete: bool
+    total_lines: int
+    lines_with_issues: int
+    summary: StockIssueSummary
+    validation_results: List[StockValidationLine]
+
+
+class StartPickingOrderInfo(BaseModel):
+    """Info de orden en respuesta de start-picking."""
+    id: int
+    numero_orden: str
+    status: str
+    fecha_inicio_picking: Optional[str] = None
+    total_cajas: int
+
+
+class StartPickingBoxInfo(BaseModel):
+    """Info de caja en respuesta de start-picking."""
+    id: int
+    numero_caja: int
+    codigo_caja: str
+    estado: str
+    is_new: bool
+
+
+class StartPickingWithBoxResponse(BaseModel):
+    """Respuesta de inicio de picking con caja."""
+    success: bool
+    message: str
+    order: StartPickingOrderInfo
+    caja: StartPickingBoxInfo
+
+
+class CompletePickingOrderInfo(BaseModel):
+    """Info de orden en respuesta de complete-picking."""
+    id: int
+    numero_orden: str
+    status: str
+    fecha_inicio_picking: Optional[str] = None
+    fecha_fin_picking: str
+    total_cajas: int
+    total_items: int
+    items_completados: int
+
+
+class ClosedBoxInfo(BaseModel):
+    """Info de caja cerrada automáticamente."""
+    id: int
+    numero_caja: int
+    codigo_caja: str
+    total_items: int
+
+
+class BoxSummaryItem(BaseModel):
+    """Resumen de una caja."""
+    numero_caja: int
+    codigo_caja: str
+    estado: str
+    total_items: int
+
+
+class StockDeductionsSummary(BaseModel):
+    """Resumen de deducciones de stock."""
+    total_lines_deducted: int
+    total_quantity_deducted: int
+    details: List[Dict[str, Any]]
+
+
+class CompletePickingResponse(BaseModel):
+    """Respuesta de completar picking."""
+    success: bool
+    message: str
+    order: CompletePickingOrderInfo
+    caja_cerrada_automaticamente: Optional[ClosedBoxInfo] = None
+    resumen_cajas: List[BoxSummaryItem]
+    stock_deductions: StockDeductionsSummary

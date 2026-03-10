@@ -1,3 +1,7 @@
+import os
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import sentry_sdk
@@ -6,7 +10,7 @@ from src.adapters.secondary.database.config import engine, Base
 from src.config.security import get_security_config
 
 sentry_sdk.init(
-    dsn="https://38c363874205e071124d0d7a3ae3c992@o4510766965325824.ingest.de.sentry.io/4510766970241104",
+    dsn=os.getenv("SENTRY_DSN", ""),
     send_default_pii=True,
 )
 # from src.adapters.primary.api.router import router as item_router  # LEGACY - Removed InventoryItemModel
@@ -25,7 +29,6 @@ from src.api_service.routes import router as api_service_router
 # COMMENTED: Tables already exist in s4t_sms database created via SQL script
 # Base.metadata.create_all(bind=engine)
 
-from contextlib import asynccontextmanager
 from src.core.logging_config import setup_logging
 from src.services.replenishment_cron_service import start_replenishment_scheduler
 from src.services.stock_reservation_cron_service import start_stock_reservation_scheduler

@@ -5,7 +5,7 @@ Models for API requests/responses related to stock replenishment
 between picking and replenishment zones.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 from datetime import datetime
 
@@ -56,8 +56,7 @@ class ReplenishmentRequestResponse(BaseModel):
     order_id: Optional[int]
     notes: Optional[str]
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ReplenishmentRequestListItem(BaseModel):
@@ -117,3 +116,99 @@ class StartExecutionRequest(BaseModel):
 class RejectRequest(BaseModel):
     """Request to reject replenishment"""
     notes: str = Field(..., description="Rejection reason")
+
+
+# ============================================================================
+# MODELOS DE RESPUESTA PARA ENDPOINTS DE REPOSICIÓN
+# ============================================================================
+
+class StartReplenishmentResponse(BaseModel):
+    """Respuesta para inicio de ejecución de reposición."""
+    success: bool
+    message: str
+    request_id: int
+    status: str
+    executor: str
+    started_at: str
+
+
+class LocationStockChange(BaseModel):
+    """Cambio de stock en una ubicación."""
+    code: str
+    stock_before: int
+    stock_after: int
+
+
+class CompleteReplenishmentResponse(BaseModel):
+    """Respuesta para completar reposición."""
+    success: bool
+    message: str
+    request_id: int
+    quantity_moved: int
+    origin_location: LocationStockChange
+    destination_location: LocationStockChange
+    completed_at: str
+
+
+class RejectReplenishmentResponse(BaseModel):
+    """Respuesta para rechazar reposición."""
+    success: bool
+    message: str
+    request_id: int
+    reason: str
+
+
+class OperatorInfo(BaseModel):
+    """Información de operario en detalle de reposición."""
+    id: int
+    nombre: str
+    codigo: str
+
+
+class ReplenishmentRequestDetail(BaseModel):
+    """Detalle completo de una solicitud de reposición."""
+    id: int
+    status: str
+    priority: str
+    requested_quantity: int
+    product: Optional[ProductInfo] = None
+    location_origin: Optional[LocationInfo] = None
+    location_destination: Optional[LocationInfo] = None
+    requester: Optional[OperatorInfo] = None
+    executor: Optional[OperatorInfo] = None
+    order_id: Optional[int] = None
+    notes: Optional[str] = None
+    requested_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    time_waiting: str
+
+
+class DiagnosticLocationDetail(BaseModel):
+    """Detalle de ubicación en diagnóstico."""
+    location_id: int
+    product_id: int
+    product_name: str
+    sku: str
+    location_code: str
+    stock_actual: int
+    stock_minimo: int
+    deficit: int
+    has_origin_stock: bool
+    origin_stock: int
+    reason: str
+
+
+class ReplenishmentDiagnosticResponse(BaseModel):
+    """Respuesta de diagnóstico del sistema de reposición."""
+    system_operator_exists: bool
+    system_operator_id: Optional[int] = None
+    picking_warehouse_id: int
+    replenishment_warehouse_id: int
+    total_low_stock_locations: int
+    ignored_zero_minimum: int
+    ignored_null_minimum: int
+    already_has_pending_request: int
+    missing_request: int
+    active_requests_total: int
+    details: list[DiagnosticLocationDetail]
