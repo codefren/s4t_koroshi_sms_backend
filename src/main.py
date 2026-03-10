@@ -44,7 +44,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FastAPI Hexagonal ODBC", lifespan=lifespan)
 
-# CORS Middleware (debe ir ANTES del SecurityMiddleware para manejar OPTIONS preflight)
+# Security middleware (inner - processes after CORS)
+app.add_middleware(SecurityMiddleware, config=get_security_config())
+
+# CORS Middleware (outer/outermost - processes first, handles OPTIONS preflight)
+# In Starlette, the LAST added middleware is the OUTERMOST and runs first
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -70,10 +74,6 @@ app.add_middleware(
     allow_headers=["*"],
     max_age=600,
 )
-
-# Security middleware with comprehensive protection
-# Features: rate limiting, IP banning, penetration detection, security headers
-app.add_middleware(SecurityMiddleware, config=get_security_config())
 
 # app.include_router(item_router, prefix="/api/v1")  # LEGACY - Removed InventoryItemModel
 app.include_router(order_router, prefix="/api/v1")

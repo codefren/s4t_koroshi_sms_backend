@@ -40,27 +40,9 @@ def get_security_config() -> SecurityConfig:
         enforce_https=False,  # Set to True in production
         
         # === CORS CONFIGURATION ===
-        # Configure allowed origins for web clients
-        enable_cors=True,
-        cors_allow_origins=[
-            "http://localhost:3000",
-            "http://localhost:5173",  # Vite dev server
-            "http://localhost:8080",
-            "http://127.0.0.1:8004",
-            "http://127.0.0.1:5173",  # Alternative localhost format
-            "http://192.168.1.14:8000",  # React Native app
-            "http://192.168.1.14:19000",  # Expo Metro bundler
-            "http://192.168.1.14:19006",  # Expo web
-            "http://172.20.10.9:8000",  # API Backend
-            "http://172.20.10.9:8081",  # Cliente PDA
-            "http://192.168.1.13:8081",  # PDA LAN
-            "http://192.168.1.13:19000",  # Expo Metro bundler LAN
-            "http://82.223.131.45:1717",  # Production frontend server
-        ],
-        cors_allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        cors_allow_headers=["*"],
-        cors_allow_credentials=True,
-        cors_max_age=600,
+        # CORS is handled by FastAPI CORSMiddleware in main.py
+        # Disabled here to avoid duplicate/conflicting CORS headers
+        enable_cors=False,
         
         # === HTTP SECURITY HEADERS ===
         security_headers={
