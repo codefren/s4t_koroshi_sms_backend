@@ -222,6 +222,14 @@ class ReplenishmentCronService:
         Crea una solicitud de reposición si no existe una pendiente
         para el mismo producto + ubicación destino.
         """
+        # Verificar que el producto esté activo
+        product = self.db.query(ProductReference).filter_by(
+            id=picking_location.product_id
+        ).first()
+        
+        if not product or not product.activo:
+            return  # Producto inactivo, no crear solicitud
+        
         # Verificar duplicados
         existing = self.db.query(ReplenishmentRequest).filter(
             ReplenishmentRequest.product_id == picking_location.product_id,
@@ -357,6 +365,10 @@ class ReplenishmentCronService:
                 "timestamp": datetime.utcnow().isoformat(),
             },
         }
+        
+        if not manager.connections:
+            logger.debug("  [BROADCAST] Sin operadores conectados, omitiendo alerta")
+            return
         
         try:
             future = asyncio.run_coroutine_threadsafe(
