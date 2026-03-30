@@ -92,10 +92,10 @@ class ProductLocationDetail(BaseModel):
     
     id: int
     code: str = Field(..., description="Código completo de ubicación")
-    pasillo: str
-    lado: str
-    ubicacion: str
-    altura: int
+    pasillo: Optional[str] = None
+    lado: Optional[str] = None
+    ubicacion: Optional[str] = None
+    altura: Optional[int] = None
     stock_actual: int = Field(..., description="Stock en esta ubicación")
     stock_minimo: int
     prioridad: int = Field(..., description="Prioridad para picking (1=alta, 5=baja)")
