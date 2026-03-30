@@ -93,6 +93,11 @@ def get_security_config() -> SecurityConfig:
             "nessus",
         ],
         
+        # === TRUSTED PROXIES ===
+        # IIS reverse proxy forwards requests with X-Forwarded-For headers
+        # Trust these IPs to avoid false positives on proxied requests (inc. WebSocket)
+        trusted_proxies=["127.0.0.1", "::1", "82.223.131.45"],
+        
         # === IP WHITELISTING (Optional) ===
         # Whitelist localhost for development and IIS proxy
         whitelist=[
