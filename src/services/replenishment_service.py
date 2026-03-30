@@ -212,10 +212,6 @@ def create_or_upgrade_replenishment(
 
     if not origin_locations:
         result.status = "no_stock"
-        logger.warning(
-            f"    ⚠️ Sin stock en REPO para producto {product_id}. "
-            f"No se crea solicitud de reposición."
-        )
         return result
 
     total_available_in_repo = sum(
