@@ -85,12 +85,10 @@ class PriorityCounts(BaseModel):
     """Count of requests per priority"""
     URGENT: int = 0
     HIGH: int = 0
-    NORMAL: int = 0
 
 
 class StatusCounts(BaseModel):
     """Count of requests per status"""
-    WAITING_STOCK: int = 0
     READY: int = 0
     IN_PROGRESS: int = 0
     COMPLETED: int = 0

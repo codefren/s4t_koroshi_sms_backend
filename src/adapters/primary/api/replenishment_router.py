@@ -11,9 +11,9 @@ from datetime import datetime, timedelta
 from typing import Optional
 import math
 
-from src.adapters.secondary.database.config import get_db
+from src.adapters.secondary.database.config import get_db, ALMACEN_REPOSICION_ID, ALMACEN_PICKING_ID
 from src.adapters.secondary.database.orm import (
-    ReplenishmentRequest, ProductLocation, ProductReference, Operator
+    ReplenishmentRequest, ProductLocation, ProductReference, Operator, StockMovement
 )
 from sqlalchemy import func as sa_func
 from src.core.domain.replenishment_models import (
@@ -54,8 +54,8 @@ def calculate_time_waiting(requested_at: datetime) -> str:
 
 @router.get("/requests", response_model=ReplenishmentRequestListResponse)
 def list_replenishment_requests(
-    status: Optional[str] = Query(None, description="Filter by status: WAITING_STOCK, READY, IN_PROGRESS, COMPLETED, REJECTED"),
-    priority: Optional[str] = Query(None, description="Filter by priority: URGENT, HIGH, NORMAL"),
+    status: Optional[str] = Query(None, description="Filter by status: READY, IN_PROGRESS, COMPLETED, REJECTED"),
+    priority: Optional[str] = Query(None, description="Filter by priority: URGENT, HIGH"),
     solo_prioritarias: bool = Query(False, description="Solo URGENT y HIGH (para PDA). Ignora el filtro priority si está activo."),
     almacen_id: Optional[int] = Query(None, description="Filter by warehouse"),
     product_id: Optional[int] = Query(None, description="Filter by product"),
@@ -107,8 +107,8 @@ def list_replenishment_requests(
             dest_loc,
             ReplenishmentRequest.location_destino_id == dest_loc.id
         ).filter(
-            origin_loc.almacen_id == 1,
-            dest_loc.almacen_id == 2
+            origin_loc.almacen_id == ALMACEN_REPOSICION_ID,
+            dest_loc.almacen_id == ALMACEN_PICKING_ID
         )
     elif priority:
         query = query.filter(ReplenishmentRequest.priority == priority)
@@ -192,7 +192,6 @@ def list_replenishment_requests(
     counts_dict = {row[0]: row[1] for row in counts_rows}
     
     status_counts = StatusCounts(
-        WAITING_STOCK=counts_dict.get("WAITING_STOCK", 0),
         READY=counts_dict.get("READY", 0),
         IN_PROGRESS=counts_dict.get("IN_PROGRESS", 0),
         COMPLETED=counts_dict.get("COMPLETED", 0),
@@ -209,7 +208,6 @@ def list_replenishment_requests(
     priority_counts = PriorityCounts(
         URGENT=priority_dict.get("URGENT", 0),
         HIGH=priority_dict.get("HIGH", 0),
-        NORMAL=priority_dict.get("NORMAL", 0),
     )
     
     return ReplenishmentRequestListResponse(
@@ -341,9 +339,13 @@ def complete_replenishment(
     # Update stock atomically
     origin_stock_before = request.location_origin.stock_actual
     dest_stock_before = request.location_destination.stock_actual
+    origin_reservado_before = request.location_origin.stock_reservado or 0
     
     request.location_origin.stock_actual -= request.requested_quantity
     request.location_destination.stock_actual += request.requested_quantity
+    
+    # Liberar stock_reservado en origen (se reservó al crear la solicitud)
+    request.location_origin.stock_reservado = max(0, origin_reservado_before - request.requested_quantity)
     
     # Update last stock update timestamp
     request.location_origin.ultima_actualizacion_stock = datetime.utcnow()
@@ -353,6 +355,31 @@ def complete_replenishment(
     request.status = "COMPLETED"
     request.completed_at = datetime.utcnow()
     request.updated_at = datetime.utcnow()
+    
+    # Crear registros de auditoría StockMovement
+    db.add(StockMovement(
+        product_location_id=request.location_origen_id,
+        product_id=request.product_id,
+        replenishment_request_id=request.id,
+        tipo="REPLENISHMENT_OUT",
+        cantidad=-request.requested_quantity,
+        stock_antes=origin_stock_before,
+        stock_despues=request.location_origin.stock_actual,
+        notas=f"Reposición #{request.id} completada. "
+              f"Salida de {request.location_origin.codigo_ubicacion}. "
+              f"Reservado: {origin_reservado_before}→{request.location_origin.stock_reservado}",
+    ))
+    db.add(StockMovement(
+        product_location_id=request.location_destino_id,
+        product_id=request.product_id,
+        replenishment_request_id=request.id,
+        tipo="REPLENISHMENT_IN",
+        cantidad=request.requested_quantity,
+        stock_antes=dest_stock_before,
+        stock_despues=request.location_destination.stock_actual,
+        notas=f"Reposición #{request.id} completada. "
+              f"Entrada a {request.location_destination.codigo_ubicacion}",
+    ))
     
     db.commit()
     
@@ -384,7 +411,7 @@ def reject_replenishment(
     """
     Reject a replenishment request.
     
-    Can reject requests in WAITING_STOCK or READY status.
+    Can reject requests in READY or IN_PROGRESS status.
     Includes rejection reason in notes.
     """
     request = db.query(ReplenishmentRequest).filter_by(id=request_id).first()
@@ -393,11 +420,34 @@ def reject_replenishment(
         raise HTTPException(status_code=404, detail="Replenishment request not found")
     
     # Can only reject pending requests
-    if request.status not in ["WAITING_STOCK", "READY", "IN_PROGRESS"]:
+    if request.status not in ["READY", "IN_PROGRESS"]:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot reject request with status {request.status}"
         )
+    
+    # Liberar stock_reservado en origen (se reservó al crear la solicitud)
+    if request.location_origen_id:
+        origin_location = db.query(ProductLocation).filter_by(
+            id=request.location_origen_id
+        ).first()
+        if origin_location:
+            reservado_antes = origin_location.stock_reservado or 0
+            origin_location.stock_reservado = max(0, reservado_antes - request.requested_quantity)
+            
+            db.add(StockMovement(
+                product_location_id=origin_location.id,
+                product_id=request.product_id,
+                replenishment_request_id=request.id,
+                tipo="REPLENISHMENT_CANCEL",
+                cantidad=request.requested_quantity,
+                stock_antes=origin_location.stock_actual or 0,
+                stock_despues=origin_location.stock_actual or 0,
+                notas=f"Reposición #{request.id} rechazada. "
+                      f"Reserva liberada en {origin_location.codigo_ubicacion}. "
+                      f"Reservado: {reservado_antes}→{origin_location.stock_reservado}. "
+                      f"Motivo: {data.notes}",
+            ))
     
     request.status = "REJECTED"
     request.notes = data.notes
@@ -485,8 +535,8 @@ def replenishment_diagnostic(
     
     Muestra por qué ciertos productos con stock bajo NO tienen solicitud de reposición.
     """
-    PICKING_WAREHOUSE_ID = 2
-    REPLENISHMENT_WAREHOUSE_ID = 1
+    PICKING_WAREHOUSE_ID = ALMACEN_PICKING_ID
+    REPLENISHMENT_WAREHOUSE_ID = ALMACEN_REPOSICION_ID
     
     # 1. Operador SYSTEM existe?
     system_operator = db.query(Operator).filter(Operator.codigo == "SYSTEM").first()
@@ -522,7 +572,7 @@ def replenishment_diagnostic(
         existing = db.query(ReplenishmentRequest).filter(
             ReplenishmentRequest.product_id == loc.product_id,
             ReplenishmentRequest.location_destino_id == loc.id,
-            ReplenishmentRequest.status.in_(["WAITING_STOCK", "READY", "IN_PROGRESS"]),
+            ReplenishmentRequest.status.in_(["READY", "IN_PROGRESS"]),
         ).first()
         
         # Buscar stock en almacén de reposición
@@ -558,7 +608,7 @@ def replenishment_diagnostic(
     
     # 6. Solicitudes activas
     active_requests = db.query(sa_func.count(ReplenishmentRequest.id)).filter(
-        ReplenishmentRequest.status.in_(["WAITING_STOCK", "READY", "IN_PROGRESS"])
+        ReplenishmentRequest.status.in_(["READY", "IN_PROGRESS"])
     ).scalar()
     
     return {

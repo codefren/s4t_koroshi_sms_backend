@@ -10,7 +10,7 @@ from datetime import datetime
 from src.adapters.secondary.database.config import get_db, ALMACEN_PICKING_ID
 from src.adapters.secondary.database.orm import (
     Operator, Order, OrderStatus, OrderLine, OrderHistory, 
-    PackingBox, ProductLocation, ProductReference
+    PackingBox, ProductLocation, ProductReference, OrderLineStockAssignment
 )
 from src.core.domain.models import (
     OperatorResponse,
@@ -456,20 +456,53 @@ def list_order_lines(
     # Formatear respuesta
     result = []
     for line in lines:
-        # Buscar ubicación de picking desde ProductLocation
-        picking_location = None
         ubicacion_id = None
         ubicacion = None
+        asignaciones = []
         
-        if line.product_reference_id:
-            # Buscar la mejor ubicación en el almacén de picking
+        # Buscar assignments para esta línea (multi-ubicación)
+        assignments = (
+            db.query(OrderLineStockAssignment)
+            .filter_by(order_line_id=line.id)
+            .all()
+        )
+        
+        if assignments:
+            for a in assignments:
+                loc = db.get(ProductLocation, a.product_location_id)
+                if loc:
+                    asignaciones.append({
+                        "product_location_id": loc.id,
+                        "codigo": loc.codigo_ubicacion,
+                        "pasillo": loc.pasillo,
+                        "lado": loc.lado,
+                        "ubicacion": loc.ubicacion,
+                        "altura": loc.altura,
+                        "stock_actual": loc.stock_actual,
+                        "cantidad_reservada": a.cantidad_reservada,
+                        "cantidad_servida": a.cantidad_servida,
+                    })
+            # Ubicación principal = primera asignación
+            if asignaciones:
+                ubicacion_id = asignaciones[0]["product_location_id"]
+                ubicacion = {
+                    "codigo": asignaciones[0]["codigo"],
+                    "pasillo": asignaciones[0]["pasillo"],
+                    "lado": asignaciones[0]["lado"],
+                    "ubicacion": asignaciones[0]["ubicacion"],
+                    "altura": asignaciones[0]["altura"],
+                    "stock_actual": asignaciones[0]["stock_actual"],
+                    "stock_minimo": None
+                }
+        elif line.product_reference_id:
+            # Fallback: buscar la mejor ubicación en el almacén de picking
             picking_location = db.query(ProductLocation).filter(
                 ProductLocation.product_id == line.product_reference_id,
                 ProductLocation.almacen_id == ALMACEN_PICKING_ID,
                 ProductLocation.activa == True
             ).order_by(
-                ProductLocation.prioridad.asc(),      # 1 = alta prioridad primero
-                ProductLocation.stock_actual.desc()   # Mayor stock primero
+                ProductLocation.prioridad.asc(),
+                ProductLocation.stock_actual.desc()
             ).first()
             
             if picking_location:
@@ -494,10 +527,10 @@ def list_order_lines(
                 "sku": line.product_reference.sku
             }
         
-        result.append({
+        line_data = {
             "id": line.id,
             "producto_id": line.product_reference_id,
-            "ubicacion_id": ubicacion_id,  # ID de ubicación en almacén de picking
+            "ubicacion_id": ubicacion_id,
             "ean": line.ean,
             "producto": producto,
             "ubicacion": ubicacion,
@@ -506,7 +539,13 @@ def list_order_lines(
             "cantidad_pendiente": line.cantidad_solicitada - line.cantidad_servida,
             "estado": line.estado,
             "progreso": round((line.cantidad_servida / line.cantidad_solicitada * 100) if line.cantidad_solicitada > 0 else 0, 2)
-        })
+        }
+        
+        # Incluir asignaciones multi-ubicación si existen
+        if asignaciones:
+            line_data["asignaciones"] = asignaciones
+        
+        result.append(line_data)
     
     return result
 

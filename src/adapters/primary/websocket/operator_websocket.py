@@ -11,8 +11,9 @@ from datetime import datetime
 from sqlalchemy import case
 
 from .manager import manager
-from src.adapters.secondary.database.orm import Operator, Order, OrderLine, OrderLineBoxDistribution, PackingBox, ReplenishmentRequest, ProductLocation, StockMovement
+from src.adapters.secondary.database.orm import Operator, Order, OrderLine, OrderLineBoxDistribution, PackingBox, ReplenishmentRequest, ProductLocation, ProductReference, StockMovement, OrderLineStockAssignment
 from src.adapters.secondary.database.config import ALMACEN_PICKING_ID, ALMACEN_REPOSICION_ID, SessionLocal
+from src.services.replenishment_service import create_or_upgrade_replenishment
 
 
 router = APIRouter()
@@ -274,6 +275,32 @@ async def handle_scan_product(
         # 5. Incrementar cantidad servida en +1
         line.cantidad_servida += 1
         
+        # 5.0. Actualizar assignment.cantidad_servida (tracking multi-ubicación)
+        assignments = (
+            db.query(OrderLineStockAssignment)
+            .filter_by(order_line_id=line.id)
+            .order_by(OrderLineStockAssignment.id)
+            .all()
+        )
+        if assignments:
+            target_assignment = None
+            # Si PDA envía ubicación, intentar matchear
+            if ubicacion:
+                for a in assignments:
+                    if a.cantidad_servida < a.cantidad_reservada:
+                        loc = db.get(ProductLocation, a.product_location_id)
+                        if loc and loc.codigo_ubicacion == ubicacion:
+                            target_assignment = a
+                            break
+            # Fallback: primer assignment con espacio disponible
+            if not target_assignment:
+                for a in assignments:
+                    if a.cantidad_servida < a.cantidad_reservada:
+                        target_assignment = a
+                        break
+            if target_assignment:
+                target_assignment.cantidad_servida += 1
+        
         # 5.1. EMPAQUE AUTOMÁTICO en caja activa usando OrderLineBoxDistribution
         if order.caja_activa_id:
             # Buscar distribución existente para esta línea en esta caja
@@ -417,136 +444,117 @@ async def handle_request_replenishment(
             await send_error(websocket, "LOCATION_NOT_FOUND", "Ubicación destino no encontrada")
             return
         
-        # 2. Buscar ubicación con stock disponible en zona de reposición
-        # Busca en el almacén de reposición (ALMACEN_REPOSICION_ID)
-        location_origen = None
-        available_locations = db.query(ProductLocation).filter(
-            ProductLocation.product_id == product_id,
-            ProductLocation.almacen_id == ALMACEN_REPOSICION_ID,
-            ProductLocation.activa == True,
-            ProductLocation.stock_actual > 0
-        ).order_by(
-            ProductLocation.prioridad.asc(),      # Prioridad alta primero
-            ProductLocation.stock_actual.desc()   # Mayor stock primero
-        ).all()
+        # 2. Usar servicio compartido de reposición (URGENT desde PDA)
+        # Siempre cantidad_needed=0 para que el servicio llene hasta capacidad máxima
+        result = create_or_upgrade_replenishment(
+            db=db,
+            product_id=product_id,
+            requester_id=operator_id,
+            priority="URGENT",
+            order_id=order_id,
+            cantidad_needed=0,
+        )
         
-        if available_locations:
-            location_origen = available_locations[0]
-        
-        # 3. Calcular cantidad solicitada
-        if not requested_quantity:
-            # Calcular déficit: stock_minimo - stock_actual
-            deficit = max(location_destino.stock_minimo - location_destino.stock_actual, 1)
-            requested_quantity = deficit
-        
-        # 4. Determinar estado y prioridad
-        if location_origen:
-            status = "READY"  # Hay stock disponible
-            origin_id = location_origen.id
-        else:
-            status = "WAITING_STOCK"  # No hay stock disponible
-            origin_id = None
-        
-        # Calcular prioridad
-        if location_destino.stock_actual == 0:
-            priority = "URGENT"
-        elif location_destino.stock_actual < (location_destino.stock_minimo * 0.5):
-            priority = "HIGH"
-        else:
-            priority = "NORMAL"
-        
-        # 5. Verificar si ya existe solicitud pendiente para este producto/ubicación
-        existing_request = db.query(ReplenishmentRequest).filter(
-            ReplenishmentRequest.product_id == product_id,
-            ReplenishmentRequest.location_destino_id == location_destino_id,
-            ReplenishmentRequest.status.in_(["WAITING_STOCK", "READY", "IN_PROGRESS"])
-        ).first()
-        
-        if existing_request:
+        # 4. Responder según resultado
+        if result.status == "no_stock":
+            prod = db.query(ProductReference).filter_by(id=product_id).first()
+            product_name = prod.nombre_producto if prod else "Producto"
             await manager.send_message(codigo_operario, {
-                "action": "replenishment_duplicate",
+                "action": "replenishment_no_stock",
                 "data": {
-                    "request_id": existing_request.id,
-                    "status": existing_request.status,
-                    "message": "⚠️ Ya existe una solicitud de reposición pendiente para este producto en esta ubicación",
+                    "product_id": product_id,
+                    "product_name": product_name,
+                    "location_destino": location_destino.codigo_ubicacion,
+                    "stock_destino": location_destino.stock_actual or 0,
+                    "message": f"❌ No hay stock de '{product_name}' en ningún almacén de reposición",
                     "timestamp": datetime.utcnow().isoformat()
                 }
             })
             return
         
-        # 6. Crear solicitud de reposición
-        replenishment_request = ReplenishmentRequest(
-            location_origen_id=origin_id,
-            location_destino_id=location_destino_id,
-            product_id=product_id,
-            requested_quantity=requested_quantity,
-            status=status,
-            priority=priority,
-            requester_id=operator_id,
-            order_id=order_id,
-            requested_at=datetime.utcnow()
-        )
+        if result.status == "no_locations":
+            await send_error(websocket, "NO_LOCATIONS", "No hay ubicaciones disponibles en picking")
+            return
         
-        db.add(replenishment_request)
+        if result.status == "product_inactive":
+            await send_error(websocket, "PRODUCT_INACTIVE", "El producto no está activo")
+            return
+        
+        # 5. Hacer commit de todo lo creado por el servicio compartido
         db.commit()
-        db.refresh(replenishment_request)
         
-        # 7. Preparar respuesta
-        origin_code = None
-        origin_stock = None
-        if location_origen:
-            origin_code = location_origen.codigo_ubicacion
-            origin_stock = location_origen.stock_actual
+        # 6. Responder al operario
+        if result.upgraded_requests and not result.created_requests:
+            # Solo se escalaron solicitudes existentes
+            req = result.upgraded_requests[0]
+            await manager.send_message(codigo_operario, {
+                "action": "replenishment_duplicate",
+                "data": {
+                    "request_id": req.id,
+                    "status": req.status,
+                    "priority": req.priority,
+                    "escalated": True,
+                    "message": "⬆️ Solicitud existente escalada a URGENT",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            })
+            return
         
-        # 8. Enviar confirmación al operario
-        await manager.send_message(codigo_operario, {
-            "action": "replenishment_created",
-            "data": {
-                "request_id": replenishment_request.id,
-                "status": status,
-                "priority": priority,
-                "requested_quantity": requested_quantity,
-                "location_destination": {
-                    "id": location_destino.id,
-                    "code": location_destino.codigo_ubicacion,
-                    "stock_actual": location_destino.stock_actual
-                },
-                "location_origin": {
-                    "id": origin_id,
-                    "code": origin_code,
-                    "stock_available": origin_stock
-                } if location_origen else None,
-                "message": "✅ Solicitud de reposición creada" if status == "READY" else "⚠️ Solicitud creada pero sin stock disponible",
-                "can_continue": True,
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        })
-        
-        print(f"✅ Solicitud de reposición #{replenishment_request.id} creada por operario {codigo_operario} - Estado: {status}")
-        
-        # 9. Broadcast alert to all connected operators (for replenishment operators' PDA)
-        product_name = "Producto"
-        product_ref = db.query(ProductLocation).filter_by(id=location_destino_id).first()
-        from ...secondary.database.orm import ProductReference
-        prod = db.query(ProductReference).filter_by(id=product_id).first()
-        if prod:
-            product_name = prod.nombre_producto
-        
-        await manager.broadcast({
-            "action": "new_replenishment_alert",
-            "data": {
-                "request_id": replenishment_request.id,
-                "status": status,
-                "priority": priority,
-                "product_name": product_name,
-                "product_id": product_id,
-                "destination_code": location_destino.codigo_ubicacion,
-                "origin_code": origin_code,
-                "requested_quantity": requested_quantity,
-                "time_waiting": "0 min",
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        }, exclude=codigo_operario)
+        if result.created_requests:
+            first_req = result.created_requests[0]
+            total_qty = sum(r.requested_quantity for r in result.created_requests)
+            
+            # Obtener info del primer origen para la respuesta
+            origin_loc = db.query(ProductLocation).filter_by(
+                id=first_req.location_origen_id
+            ).first()
+            
+            await manager.send_message(codigo_operario, {
+                "action": "replenishment_created",
+                "data": {
+                    "request_id": first_req.id,
+                    "status": "READY",
+                    "priority": "URGENT",
+                    "requested_quantity": total_qty,
+                    "total_requests": len(result.created_requests),
+                    "location_destination": {
+                        "id": location_destino.id,
+                        "code": location_destino.codigo_ubicacion,
+                        "stock_actual": location_destino.stock_actual
+                    },
+                    "location_origin": {
+                        "id": origin_loc.id,
+                        "code": origin_loc.codigo_ubicacion,
+                        "stock_available": origin_loc.stock_actual
+                    } if origin_loc else None,
+                    "message": f"✅ {len(result.created_requests)} solicitud(es) de reposición creada(s)",
+                    "can_continue": True,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            })
+            
+            print(f"✅ {len(result.created_requests)} solicitud(es) de reposición creada(s) por operario {codigo_operario}")
+            
+            # 7. Broadcast alerta a todos los operarios conectados
+            prod = db.query(ProductReference).filter_by(id=product_id).first()
+            product_name = prod.nombre_producto if prod else "Producto"
+            
+            await manager.broadcast({
+                "action": "new_replenishment_alert",
+                "data": {
+                    "request_id": first_req.id,
+                    "status": "READY",
+                    "priority": "URGENT",
+                    "product_name": product_name,
+                    "product_id": product_id,
+                    "destination_code": location_destino.codigo_ubicacion,
+                    "origin_code": origin_loc.codigo_ubicacion if origin_loc else None,
+                    "requested_quantity": total_qty,
+                    "total_requests": len(result.created_requests),
+                    "time_waiting": "0 min",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            }, exclude=codigo_operario)
     
     except Exception as e:
         print(f"❌ Error en handle_request_replenishment: {e}")
@@ -577,7 +585,6 @@ async def handle_request_replenishment_urgent(
         data: { location_destino_id, product_id, order_id, requested_quantity }
     """
     from ...secondary.database.config import SessionLocal
-    from ...secondary.database.orm import ProductReference
     db = SessionLocal()
     
     try:
@@ -598,129 +605,145 @@ async def handle_request_replenishment_urgent(
             await send_error(websocket, "INVALID_QUANTITY", "La cantidad solicitada debe ser mayor a 0")
             return
         
-        # 1. Validar ubicación destino
-        location_destino = db.query(ProductLocation).filter_by(id=location_destino_id).first()
-        if not location_destino:
-            await send_error(websocket, "LOCATION_NOT_FOUND", "Ubicación destino no encontrada")
+        prod = db.query(ProductReference).filter_by(id=product_id).first()
+        product_name = prod.nombre_producto if prod else "Producto"
+        
+        # 1. Buscar ubicaciones picking del producto con stock disponible
+        # stock disponible = stock_actual - stock_reservado
+        picking_locations = (
+            db.query(ProductLocation)
+            .filter(
+                ProductLocation.product_id == product_id,
+                ProductLocation.almacen_id == ALMACEN_PICKING_ID,
+                ProductLocation.activa == True,
+                (ProductLocation.stock_actual - ProductLocation.stock_reservado) > 0,
+            )
+            .order_by(
+                (ProductLocation.stock_actual - ProductLocation.stock_reservado).desc()
+            )
+            .all()
+        )
+        
+        # 2. Calcular stock total disponible en picking
+        total_picking_stock = sum(
+            (loc.stock_actual or 0) - (loc.stock_reservado or 0)
+            for loc in picking_locations
+        )
+        
+        # 3. Si hay suficiente stock en picking → responder sin crear solicitud
+        if total_picking_stock >= requested_quantity:
+            await manager.send_message(codigo_operario, {
+                "action": "replenishment_stock_available",
+                "data": {
+                    "product_id": product_id,
+                    "product_name": product_name,
+                    "requested_quantity": requested_quantity,
+                    "total_stock_available": total_picking_stock,
+                    "message": f"✅ Hay stock disponible de '{product_name}' ({total_picking_stock} uds)",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            })
             return
         
-        # 2. Verificar si ya existe solicitud pendiente para este producto/ubicación
-        existing_request = db.query(ReplenishmentRequest).filter(
-            ReplenishmentRequest.product_id == product_id,
-            ReplenishmentRequest.location_destino_id == location_destino_id,
-            ReplenishmentRequest.status.in_(["WAITING_STOCK", "READY", "IN_PROGRESS"])
-        ).first()
+        # 4. No hay suficiente stock → crear solicitud de reposición URGENT
+        result = create_or_upgrade_replenishment(
+            db=db,
+            product_id=product_id,
+            requester_id=operator_id,
+            priority="URGENT",
+            order_id=order_id,
+            cantidad_needed=requested_quantity,
+        )
         
-        if existing_request:
-            # Escalar a URGENT si no lo es
-            if existing_request.priority != "URGENT":
-                existing_request.priority = "URGENT"
-                existing_request.updated_at = datetime.utcnow()
-                db.commit()
-            
+        if result.status == "no_stock":
+            await manager.send_message(codigo_operario, {
+                "action": "replenishment_no_stock",
+                "data": {
+                    "product_id": product_id,
+                    "product_name": product_name,
+                    "requested_quantity": requested_quantity,
+                    "stock_in_picking": total_picking_stock,
+                    "message": f"❌ No hay stock de '{product_name}' en ningún almacén de reposición",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            })
+            return
+        
+        if result.status == "no_locations":
+            await send_error(websocket, "NO_LOCATIONS", "No hay ubicaciones disponibles en picking")
+            return
+        
+        if result.status == "product_inactive":
+            await send_error(websocket, "PRODUCT_INACTIVE", "El producto no está activo")
+            return
+        
+        # 5. Hacer commit
+        db.commit()
+        
+        # 6. Si solo escaló existentes
+        if result.upgraded_requests and not result.created_requests:
+            req = result.upgraded_requests[0]
             await manager.send_message(codigo_operario, {
                 "action": "replenishment_urgent_exists",
                 "data": {
-                    "request_id": existing_request.id,
-                    "status": existing_request.status,
-                    "priority": existing_request.priority,
+                    "request_id": req.id,
+                    "status": req.status,
+                    "priority": req.priority,
+                    "stock_in_picking": total_picking_stock,
+                    "requested_quantity": requested_quantity,
                     "message": "⚠️ Ya existe una solicitud de reposición para este producto. Se ha escalado a URGENTE.",
                     "timestamp": datetime.utcnow().isoformat()
                 }
             })
             return
         
-        # 3. Buscar ubicación origen con stock (zona reposición)
-        location_origen = None
-        replenishment_locations = db.query(ProductLocation).filter(
-            ProductLocation.product_id == product_id,
-            ProductLocation.almacen_id == location_destino.almacen_id,
-            ProductLocation.activa == True,
-            ProductLocation.id != location_destino_id,
-            ProductLocation.stock_actual > 0
-        ).order_by(ProductLocation.stock_actual.desc()).all()
-        
-        # Priorizar zona REP
-        for loc in replenishment_locations:
-            if loc.pasillo and loc.pasillo.upper().startswith("REP"):
-                location_origen = loc
-                break
-        
-        if not location_origen and replenishment_locations:
-            location_origen = replenishment_locations[0]
-        
-        # 4. Determinar estado
-        if location_origen:
-            status = "READY"
-            origin_id = location_origen.id
-        else:
-            status = "WAITING_STOCK"
-            origin_id = None
-        
-        # 5. Crear solicitud URGENT
-        replenishment_request = ReplenishmentRequest(
-            location_origen_id=origin_id,
-            location_destino_id=location_destino_id,
-            product_id=product_id,
-            requested_quantity=requested_quantity,
-            status=status,
-            priority="URGENT",
-            requester_id=operator_id,
-            order_id=order_id,
-            requested_at=datetime.utcnow()
-        )
-        
-        db.add(replenishment_request)
-        db.commit()
-        db.refresh(replenishment_request)
-        
-        # 6. Responder al operario
-        origin_code = location_origen.codigo_ubicacion if location_origen else None
-        origin_stock = location_origen.stock_actual if location_origen else None
-        
-        await manager.send_message(codigo_operario, {
-            "action": "replenishment_urgent_created",
-            "data": {
-                "request_id": replenishment_request.id,
-                "status": status,
-                "priority": "URGENT",
-                "requested_quantity": requested_quantity,
-                "location_destination": {
-                    "id": location_destino.id,
-                    "code": location_destino.codigo_ubicacion,
-                    "stock_actual": location_destino.stock_actual
-                },
-                "location_origin": {
-                    "id": origin_id,
-                    "code": origin_code,
-                    "stock_available": origin_stock
-                } if location_origen else None,
-                "message": "🚨 Solicitud de reposición URGENTE creada",
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        })
-        
-        # 7. Broadcast alerta a todos los operarios conectados
-        prod = db.query(ProductReference).filter_by(id=product_id).first()
-        product_name = prod.nombre_producto if prod else "Producto"
-        
-        await manager.broadcast({
-            "action": "new_replenishment_alert",
-            "data": {
-                "request_id": replenishment_request.id,
-                "status": status,
-                "priority": "URGENT",
-                "product_name": product_name,
-                "product_id": product_id,
-                "destination_code": location_destino.codigo_ubicacion,
-                "origin_code": origin_code,
-                "requested_quantity": requested_quantity,
-                "time_waiting": "0 min",
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        }, exclude=codigo_operario)
-        
-        print(f"🚨 Solicitud de reposición URGENTE #{replenishment_request.id} creada por operario {codigo_operario}")
+        # 7. Solicitudes creadas — responder al operario
+        if result.created_requests:
+            first_req = result.created_requests[0]
+            total_qty = sum(r.requested_quantity for r in result.created_requests)
+            
+            origin_loc = db.query(ProductLocation).filter_by(
+                id=first_req.location_origen_id
+            ).first()
+            
+            await manager.send_message(codigo_operario, {
+                "action": "replenishment_urgent_created",
+                "data": {
+                    "request_id": first_req.id,
+                    "status": "READY",
+                    "priority": "URGENT",
+                    "requested_quantity": total_qty,
+                    "order_requested_quantity": requested_quantity,
+                    "stock_in_picking": total_picking_stock,
+                    "total_requests": len(result.created_requests),
+                    "location_origin": {
+                        "id": origin_loc.id,
+                        "code": origin_loc.codigo_ubicacion,
+                        "stock_available": origin_loc.stock_actual
+                    } if origin_loc else None,
+                    "message": f"🚨 Solicitud de reposición URGENTE creada (faltaban {requested_quantity - total_picking_stock} uds)",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            })
+            
+            # 8. Broadcast alerta
+            await manager.broadcast({
+                "action": "new_replenishment_alert",
+                "data": {
+                    "request_id": first_req.id,
+                    "status": "READY",
+                    "priority": "URGENT",
+                    "product_name": product_name,
+                    "product_id": product_id,
+                    "origin_code": origin_loc.codigo_ubicacion if origin_loc else None,
+                    "requested_quantity": total_qty,
+                    "total_requests": len(result.created_requests),
+                    "time_waiting": "0 min",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            }, exclude=codigo_operario)
+            
+            print(f"🚨 {len(result.created_requests)} solicitud(es) URGENTE(s) creada(s) por operario {codigo_operario}")
     
     except Exception as e:
         print(f"❌ Error en handle_request_replenishment_urgent: {e}")
@@ -1122,9 +1145,13 @@ async def handle_confirm_replenishment(
         # 5. Move stock atomically
         origin_stock_before = origin_location.stock_actual
         dest_stock_before = destination_location.stock_actual
+        origin_reservado_before = origin_location.stock_reservado or 0
         
         origin_location.stock_actual -= cantidad_servida
         destination_location.stock_actual += cantidad_servida
+        
+        # Liberar stock_reservado en origen (se reservó al crear la solicitud)
+        origin_location.stock_reservado = max(0, origin_reservado_before - request.requested_quantity)
         
         # Update last stock update timestamp
         origin_location.ultima_actualizacion_stock = datetime.utcnow()
@@ -1135,6 +1162,31 @@ async def handle_confirm_replenishment(
         request.actual_quantity = cantidad_servida
         request.completed_at = datetime.utcnow()
         request.updated_at = datetime.utcnow()
+        
+        # Crear registros de auditoría StockMovement
+        db.add(StockMovement(
+            product_location_id=origin_location.id,
+            product_id=request.product_id,
+            replenishment_request_id=request.id,
+            tipo="REPLENISHMENT_OUT",
+            cantidad=-cantidad_servida,
+            stock_antes=origin_stock_before,
+            stock_despues=origin_location.stock_actual,
+            notas=f"Reposición #{request.id} completada por operario {codigo_operario}. "
+                  f"Salida de {origin_location.codigo_ubicacion}. "
+                  f"Reservado: {origin_reservado_before}→{origin_location.stock_reservado}",
+        ))
+        db.add(StockMovement(
+            product_location_id=destination_location.id,
+            product_id=request.product_id,
+            replenishment_request_id=request.id,
+            tipo="REPLENISHMENT_IN",
+            cantidad=cantidad_servida,
+            stock_antes=dest_stock_before,
+            stock_despues=destination_location.stock_actual,
+            notas=f"Reposición #{request.id} completada por operario {codigo_operario}. "
+                  f"Entrada a {destination_location.codigo_ubicacion}",
+        ))
         
         db.commit()
         

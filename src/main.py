@@ -30,16 +30,13 @@ from src.api_service.routes import router as api_service_router
 # Base.metadata.create_all(bind=engine)
 
 from src.core.logging_config import setup_logging
-from src.services.replenishment_cron_service import start_replenishment_scheduler
 from src.services.stock_reservation_cron_service import start_stock_reservation_scheduler
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
-    replenishment_scheduler = start_replenishment_scheduler()
     stock_scheduler = start_stock_reservation_scheduler()
     yield
-    replenishment_scheduler.shutdown()
     stock_scheduler.shutdown()
 
 app = FastAPI(title="FastAPI Hexagonal ODBC", lifespan=lifespan)

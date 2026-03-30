@@ -19,7 +19,8 @@ from src.adapters.secondary.database.orm import (
     ProductReference,
     ProductLocation,
     PackingBox,
-    OrderLineBoxDistribution
+    OrderLineBoxDistribution,
+    OrderLineStockAssignment,
 )
 from src.services.stock_reservation_cron_service import (
     deduct_stock_for_order,
@@ -29,6 +30,8 @@ from src.core.domain.models import (
     OrderListItem, 
     OrderDetailFull, 
     OrderProductDetail,
+    UbicacionDetail,
+    StockAssignmentDetail,
     OrderStatsResponse,
     OrderHistoryResponse,
     AssignOperatorRequest,
@@ -57,6 +60,7 @@ def list_orders(
     fecha_desde: Optional[date] = Query(None, description="Filtrar órdenes desde esta fecha (fecha_orden)"),
     fecha_hasta: Optional[date] = Query(None, description="Filtrar órdenes hasta esta fecha (fecha_orden)"),
     type: Optional[str] = Query(None, description="Filtrar por tipo de orden"),
+    codigo_operario: Optional[str] = Query(None, description="Filtrar por código de operario asignado"),
     db: Session = Depends(get_db)
 ):
     """
@@ -98,6 +102,9 @@ def list_orders(
     
     if type:
         query = query.filter(Order.type == type)
+    
+    if codigo_operario:
+        query = query.join(Operator).filter(Operator.codigo == codigo_operario)
     
     # Ordenar por fecha de importación descendente (más recientes primero)
     query = query.order_by(Order.fecha_importacion.desc())
@@ -280,6 +287,43 @@ def get_order_detail(
         product = line.product_reference
         location = line.product_location
         
+        # Construir ubicacion_detalle desde la ubicación principal
+        ubicacion_detalle = None
+        if location:
+            ubicacion_detalle = UbicacionDetail(
+                id=location.id,
+                codigo=location.codigo_ubicacion,
+                pasillo=location.pasillo,
+                lado=location.lado,
+                altura=location.altura,
+                stock_actual=location.stock_actual,
+            )
+        
+        # Cargar asignaciones multi-ubicación
+        asignaciones = None
+        assignments = (
+            db.query(OrderLineStockAssignment)
+            .filter_by(order_line_id=line.id)
+            .all()
+        )
+        if assignments:
+            asignaciones = []
+            for a in assignments:
+                loc = db.get(ProductLocation, a.product_location_id)
+                if loc:
+                    asignaciones.append(StockAssignmentDetail(
+                        ubicacion=UbicacionDetail(
+                            id=loc.id,
+                            codigo=loc.codigo_ubicacion,
+                            pasillo=loc.pasillo,
+                            lado=loc.lado,
+                            altura=loc.altura,
+                            stock_actual=loc.stock_actual,
+                        ),
+                        cantidad_reservada=a.cantidad_reservada,
+                        cantidad_servida=a.cantidad_servida,
+                    ))
+        
         producto = OrderProductDetail(
             id=line.id,
             nombre=product.nombre_producto if product else "Producto no vinculado",
@@ -293,7 +337,9 @@ def get_order_detail(
             cantidad_servida=line.cantidad_servida,
             estado=line.estado,
             stock_reserved=line.stock_reserved,
-            product_location_id=line.product_location_id
+            product_location_id=line.product_location_id,
+            ubicacion_detalle=ubicacion_detalle,
+            asignaciones=asignaciones,
         )
         productos.append(producto)
     
@@ -633,7 +679,8 @@ def optimize_picking_route(
     - Tiempo estimado
     """
     order = db.query(Order).options(
-        joinedload(Order.order_lines).joinedload(OrderLine.product_location)
+        joinedload(Order.order_lines).joinedload(OrderLine.product_location),
+        joinedload(Order.order_lines).joinedload(OrderLine.product_reference)
     ).filter(Order.id == order_id).first()
     
     if not order:
@@ -642,39 +689,48 @@ def optimize_picking_route(
     if not order.order_lines:
         raise HTTPException(status_code=400, detail="La orden no tiene líneas de productos")
     
-    lines_by_aisle: Dict[str, List[OrderLine]] = {}
+    # Construir lista de paradas: 1 parada por assignment (multi-ubicación)
+    # Fallback: 1 parada por línea usando product_location_id
+    stops_by_aisle: Dict[str, list] = {}
     lines_without_location = []
     
     for line in order.order_lines:
-        if line.product_location and line.product_location.activa:
-            pasillo = line.product_location.pasillo
-            if pasillo not in lines_by_aisle:
-                lines_by_aisle[pasillo] = []
-            lines_by_aisle[pasillo].append(line)
-        else:
-            product_name = line.product_reference.nombre_producto if line.product_reference else "Producto desconocido"
-            lines_without_location.append({
-                "line_id": line.id,
-                "producto": product_name,
-                "ean": line.ean
-            })
-    
-    picking_route = []
-    secuencia = 1
-    
-    for pasillo in sorted(lines_by_aisle.keys()):
-        sorted_lines = sorted(
-            lines_by_aisle[pasillo],
-            key=lambda x: (x.product_location.prioridad, x.product_location.altura)
+        product = line.product_reference
+        producto_nombre = product.nombre_producto if product else "Producto desconocido"
+        
+        # Buscar assignments para esta línea
+        assignments = (
+            db.query(OrderLineStockAssignment)
+            .filter_by(order_line_id=line.id)
+            .all()
         )
         
-        for line in sorted_lines:
+        if assignments:
+            for assignment in assignments:
+                loc = db.get(ProductLocation, assignment.product_location_id)
+                if not loc or not loc.activa:
+                    continue
+                pasillo = loc.pasillo
+                if pasillo not in stops_by_aisle:
+                    stops_by_aisle[pasillo] = []
+                stops_by_aisle[pasillo].append({
+                    "order_line_id": line.id,
+                    "producto": producto_nombre,
+                    "cantidad": assignment.cantidad_reservada,
+                    "ubicacion": loc.codigo_ubicacion,
+                    "pasillo": loc.pasillo,
+                    "lado": loc.lado,
+                    "altura": loc.altura,
+                    "prioridad": loc.prioridad,
+                    "stock_disponible": loc.stock_actual,
+                    "_sort_key": (loc.prioridad, loc.altura),
+                })
+        elif line.product_location and line.product_location.activa:
             loc = line.product_location
-            product = line.product_reference
-            producto_nombre = product.nombre_producto if product else "Producto desconocido"
-            
-            picking_route.append({
-                "secuencia": secuencia,
+            pasillo = loc.pasillo
+            if pasillo not in stops_by_aisle:
+                stops_by_aisle[pasillo] = []
+            stops_by_aisle[pasillo].append({
                 "order_line_id": line.id,
                 "producto": producto_nombre,
                 "cantidad": line.cantidad_solicitada,
@@ -683,15 +739,32 @@ def optimize_picking_route(
                 "lado": loc.lado,
                 "altura": loc.altura,
                 "prioridad": loc.prioridad,
-                "stock_disponible": loc.stock_actual
+                "stock_disponible": loc.stock_actual,
+                "_sort_key": (loc.prioridad, loc.altura),
             })
+        else:
+            lines_without_location.append({
+                "line_id": line.id,
+                "producto": producto_nombre,
+                "ean": line.ean
+            })
+    
+    picking_route = []
+    secuencia = 1
+    
+    for pasillo in sorted(stops_by_aisle.keys()):
+        sorted_stops = sorted(stops_by_aisle[pasillo], key=lambda x: x["_sort_key"])
+        for stop in sorted_stops:
+            stop.pop("_sort_key", None)
+            stop["secuencia"] = secuencia
+            picking_route.append(stop)
             secuencia += 1
     
     return {
         "order_id": order_id,
         "numero_orden": order.numero_orden,
         "total_stops": len(picking_route),
-        "aisles_to_visit": sorted(lines_by_aisle.keys()),
+        "aisles_to_visit": sorted(stops_by_aisle.keys()),
         "estimated_time_minutes": round(len(picking_route) * 1.5, 1),
         "picking_route": picking_route,
         "warnings": {
@@ -737,13 +810,41 @@ def validate_order_stock(
             "issues": []
         }
         
-        if not line.product_location:
-            result["issues"].append({"type": "no_location", "message": "No hay ubicación vinculada", "severity": "warning"})
-            result["stock_disponible"] = None
-            result["ubicacion"] = "Sin ubicación"
-            has_issues = True
-            issues_count["no_location"] += 1
-        else:
+        # Buscar assignments para esta línea
+        assignments = (
+            db.query(OrderLineStockAssignment)
+            .filter_by(order_line_id=line.id)
+            .all()
+        )
+        
+        if assignments:
+            total_reservada = sum(a.cantidad_reservada for a in assignments)
+            ubicaciones = []
+            for a in assignments:
+                loc = db.get(ProductLocation, a.product_location_id)
+                if loc:
+                    ubicaciones.append(loc.codigo_ubicacion)
+                    if not loc.activa:
+                        result["issues"].append({
+                            "type": "inactive_location",
+                            "message": f"Ubicación {loc.codigo_ubicacion} está inactiva",
+                            "severity": "warning"
+                        })
+                        has_issues = True
+                        issues_count["inactive_location"] += 1
+            
+            result["stock_disponible"] = total_reservada
+            result["ubicacion"] = ", ".join(ubicaciones) if ubicaciones else "Sin ubicación"
+            
+            if total_reservada < line.cantidad_solicitada:
+                result["issues"].append({
+                    "type": "insufficient_stock",
+                    "message": f"Reserva parcial: {total_reservada} reservada de {line.cantidad_solicitada} solicitada",
+                    "severity": "warning"
+                })
+                has_issues = True
+                issues_count["insufficient_stock"] += 1
+        elif line.product_location:
             loc = line.product_location
             result["stock_disponible"] = loc.stock_actual
             result["ubicacion"] = loc.codigo_ubicacion
@@ -761,6 +862,12 @@ def validate_order_stock(
                 result["issues"].append({"type": "inactive_location", "message": "La ubicación está inactiva", "severity": "warning"})
                 has_issues = True
                 issues_count["inactive_location"] += 1
+        else:
+            result["issues"].append({"type": "no_location", "message": "No hay ubicación vinculada", "severity": "warning"})
+            result["stock_disponible"] = None
+            result["ubicacion"] = "Sin ubicación"
+            has_issues = True
+            issues_count["no_location"] += 1
         
         if line.product_reference and not line.product_reference.activo:
             result["issues"].append({"type": "inactive_product", "message": "El producto está inactivo", "severity": "warning"})

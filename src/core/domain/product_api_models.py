@@ -202,6 +202,57 @@ def calculate_product_status(stock: int) -> tuple[str, str]:
         return ("Activo", "active")
 
 
+class StaleProductItem(BaseModel):
+    """Producto sin movimiento en 2+ semanas en zona de picking."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    product_id: int
+    referencia: str
+    nombre_producto: str
+    sku: Optional[str] = None
+    color_id: Optional[str] = None
+    talla: Optional[str] = None
+    
+    location_id: int
+    codigo_ubicacion: str
+    pasillo: Optional[str] = None
+    lado: Optional[str] = None
+    ubicacion: Optional[str] = None
+    altura: Optional[int] = None
+    
+    stock_actual: int = 0
+    stock_reservado: int = 0
+    
+    ultimo_movimiento: Optional[str] = Field(None, description="Fecha del último StockMovement")
+    dias_sin_movimiento: int = Field(0, description="Días desde el último movimiento")
+
+
+class StaleProductsResponse(BaseModel):
+    """Respuesta del endpoint /products/stale."""
+    total: int
+    threshold_days: int = 14
+    items: List[StaleProductItem] = []
+
+
+class OutOfStockItem(BaseModel):
+    """Producto sin stock en ningún almacén que tiene órdenes pendientes."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    product_id: int
+    referencia: str
+    nombre_producto: str
+    sku: Optional[str] = None
+    cantidad_pendiente: int = Field(description="Cantidad total solicitada sin reservar")
+    ordenes_afectadas: int = Field(description="Número de órdenes que necesitan este producto")
+    tiene_solicitud_reposicion: bool = Field(False, description="Si ya existe una solicitud de reposición activa")
+
+
+class OutOfStockResponse(BaseModel):
+    """Respuesta del endpoint /products/out-of-stock-orders."""
+    total: int
+    items: List[OutOfStockItem] = []
+
+
 def format_location_code(pasillo: str, lado: str, ubicacion: str, altura: int) -> str:
     """
     Formatea un código de ubicación según el formato esperado por el frontend.

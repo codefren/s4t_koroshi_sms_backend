@@ -266,6 +266,23 @@ class OrderListItem(BaseModel):
     fecha_importacion: datetime
 
 
+class UbicacionDetail(BaseModel):
+    """Detalle estructurado de una ubicación de picking."""
+    id: int
+    codigo: str
+    pasillo: Optional[str] = None
+    lado: Optional[str] = None
+    altura: Optional[int] = None
+    stock_actual: Optional[int] = None
+
+
+class StockAssignmentDetail(BaseModel):
+    """Detalle de una asignación de stock por ubicación."""
+    ubicacion: UbicacionDetail
+    cantidad_reservada: int
+    cantidad_servida: int
+
+
 class OrderProductDetail(BaseModel):
     """Modelo para detalle de producto en una orden."""
     model_config = ConfigDict(from_attributes=True)
@@ -283,6 +300,8 @@ class OrderProductDetail(BaseModel):
     estado: str = Field(description="Estado de la línea (PENDING, PARTIAL, COMPLETED)")
     stock_reserved: bool = Field(default=False, description="Si el stock está reservado")
     product_location_id: Optional[int] = Field(None, description="ID ubicación de picking asignada")
+    ubicacion_detalle: Optional[UbicacionDetail] = Field(None, description="Detalle estructurado de la ubicación principal")
+    asignaciones: Optional[List[StockAssignmentDetail]] = Field(None, description="Asignaciones de stock multi-ubicación")
 
 
 class OrderDetailFull(BaseModel):
@@ -557,9 +576,62 @@ class ProductReferenceUpdate(BaseModel):
 class ProductReferenceResponse(ProductReferenceBase):
     """Modelo de respuesta para referencia de producto."""
     id: int
+    familia_id: Optional[int] = Field(None, description="ID de la familia del producto")
     created_at: datetime
     updated_at: datetime
 
+
+# ============================================================================
+# MODELOS DE FAMILIAS DE PRODUCTOS
+# ============================================================================
+
+class ProductFamilyBase(BaseModel):
+    """Modelo base para familias de productos."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    nombre: str = Field(
+        ..., 
+        max_length=100,
+        description="Nombre de la familia (ej: Camisas, Pantalones, Zapatos)"
+    )
+    descripcion: Optional[str] = Field(
+        None, 
+        max_length=250,
+        description="Descripción de la familia"
+    )
+    capacidad_ubicacion: int = Field(
+        default=20,
+        ge=1,
+        description="Máximo de unidades por ubicación de picking para esta familia"
+    )
+    activo: bool = True
+
+
+class ProductFamilyCreate(ProductFamilyBase):
+    """Modelo para crear familia de productos."""
+    pass
+
+
+class ProductFamilyUpdate(BaseModel):
+    """Modelo para actualizar familia de productos."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    nombre: Optional[str] = Field(None, max_length=100)
+    descripcion: Optional[str] = Field(None, max_length=250)
+    capacidad_ubicacion: Optional[int] = Field(None, ge=1)
+    activo: Optional[bool] = None
+
+
+class ProductFamilyResponse(ProductFamilyBase):
+    """Modelo de respuesta para familia de productos."""
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+# ============================================================================
+# MODELOS DE UBICACIONES DE PRODUCTOS
+# ============================================================================
 
 class ProductLocationBase(BaseModel):
     """Modelo base para ubicaciones de producto."""
@@ -632,7 +704,7 @@ class ProductLocationUpdate(BaseModel):
 class ProductLocationResponse(ProductLocationBase):
     """Modelo de respuesta para ubicación de producto."""
     id: int
-    product_id: int
+    product_id: Optional[int] = Field(None, description="ID del producto asignado (NULL = ubicación libre)")
     codigo_ubicacion: str = Field(
         ...,
         description="Código de ubicación generado automáticamente (propiedad computada)"
@@ -730,7 +802,7 @@ class UbicacionBasicInfo(BaseModel):
     pasillo: Optional[str] = None
     lado: Optional[str] = None
     ubicacion: Optional[str] = None
-    altura: Optional[str] = None
+    altura: Optional[int] = None
     stock_actual: Optional[int] = None
     stock_minimo: Optional[int] = None
 

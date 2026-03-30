@@ -369,7 +369,7 @@ class PackingBox(Base):
     
     # Dimensiones de la caja en formato texto
     # Ejemplo: "40x30x20 cm", "50x40x35"
-    dimensiones = Column(String(50), nullable=True)
+    dimensiones = Column(String(100), nullable=True)
     
     # === CONTADOR DESNORMALIZADO ===
     # Total de items (order_lines) asignados a esta caja
@@ -600,7 +600,7 @@ class OrderHistory(Base):
     order_id = Column(Integer, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
     
     # Estado de la orden en el momento de este evento
-    status_id = Column(Integer, ForeignKey("order_status.id", ondelete="NO ACTION"), nullable=False, index=True)
+    status_id = Column(Integer, ForeignKey("order_status.id", ondelete="NO ACTION"), nullable=True, index=True)
     
     # Operario que generó/causó este evento (NULL si fue automático)
     operator_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True, index=True)
@@ -703,9 +703,9 @@ class PickingTask(Base):
     # Puede calcularse con algoritmos de optimización de rutas
     secuencia = Column(Integer, nullable=True, index=True)
     
-    # Prioridad de la tarea (1=baja, 5=alta)
+    # Prioridad de la tarea: NORMAL, HIGH, URGENT
     # Tareas de alta prioridad se muestran primero
-    prioridad = Column(Integer, default=1, nullable=False)
+    prioridad = Column(String(20), default='NORMAL', nullable=False)
     
     # === TIEMPOS ===
     # Cuándo el operario empezó esta tarea
@@ -763,7 +763,7 @@ class EAN(Base):
     
     # Código de barras EAN (generalmente 13 dígitos)
     # UNIQUE: Un mismo EAN no puede repetirse en el sistema
-    ean = Column(String(13), unique=True, nullable=False, index=True)
+    ean = Column(String(50), unique=True, nullable=False, index=True)
     
     # Referencia al producto asociado
     # NULL = EAN sin producto asignado (pendiente de catalogar)
@@ -776,6 +776,35 @@ class EAN(Base):
     
     # Relationships
     product = relationship("ProductReference", back_populates="eans")
+
+
+class ProductFamily(Base):
+    """
+    Familias de productos.
+    
+    Cada familia define la capacidad máxima por ubicación de picking.
+    Ejemplo: Camisas=20 uds/ubicación, Zapatos=10 uds/ubicación.
+    Productos sin familia asignada usarán capacidad por defecto (20).
+    """
+    __tablename__ = "product_families"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String(100), unique=True, nullable=False, index=True)
+    descripcion = Column(String(250), nullable=True)
+    
+    # Máximo de unidades que caben en UNA ubicación de picking para esta familia
+    capacidad_ubicacion = Column(Integer, nullable=False, default=20)
+    
+    activo = Column(Boolean, default=True, nullable=False, index=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    products = relationship("ProductReference", back_populates="familia")
+
+    def __repr__(self):
+        return f"<ProductFamily {self.id} {self.nombre} cap={self.capacidad_ubicacion}>"
 
 
 class ProductReference(Base):
@@ -807,7 +836,7 @@ class ProductReference(Base):
     # Código único que identifica este producto específico (color + talla)
     # Ejemplo: "2A3F4B", "FF00AA", "A1B2C3"
     # Validación: Solo caracteres hexadecimales [0-9A-Fa-f]
-    referencia = Column(String(50), unique=True, nullable=False, index=True)
+    referencia = Column(String(100), unique=True, nullable=False, index=True)
     
     # Nombre descriptivo del producto
     # Ejemplo: "Camisa Polo Manga Corta", "Pantalón Vaquero Slim"
@@ -839,15 +868,22 @@ class ProductReference(Base):
     # False = descontinuado o fuera de catálogo
     activo = Column(Boolean, default=True, nullable=False, index=True)
     
+    # Familia del producto (determina capacidad por ubicación)
+    # NULL = sin familia asignada, usa capacidad por defecto (20)
+    familia_id = Column(Integer, ForeignKey("product_families.id", ondelete="SET NULL"), nullable=True, index=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     # Un producto puede estar en múltiples ubicaciones
-    locations = relationship("ProductLocation", back_populates="product", cascade="all, delete-orphan")
+    locations = relationship("ProductLocation", back_populates="product")
     
     # Un producto puede tener múltiples códigos EAN
     eans = relationship("EAN", back_populates="product", cascade="all, delete-orphan")
+    
+    # Familia del producto
+    familia = relationship("ProductFamily", back_populates="products")
 
     __table_args__ = (
         # Índice para búsquedas por color y talla
@@ -905,7 +941,7 @@ class ProductLocation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     almacen_id = Column(Integer, ForeignKey("almacenes.id", ondelete="CASCADE"), nullable=False)
-    product_id = Column(Integer, ForeignKey("product_references.id", ondelete="CASCADE"), nullable=False)
+    product_id = Column(Integer, ForeignKey("product_references.id", ondelete="SET NULL"), nullable=True)
     
     # === COMPONENTES DE LA UBICACIÓN ===
     
@@ -982,9 +1018,9 @@ class ProductLocation(Base):
         Index('idx_stock_bajo', 'stock_actual', 'stock_minimo'),
         # Índice para ubicaciones activas con prioridad
         Index('idx_activa_prioridad', 'activa', 'prioridad'),
-        # Asegurar que no haya ubicaciones duplicadas para el mismo producto
-        UniqueConstraint('product_id', 'pasillo', 'lado', 'ubicacion', 'altura', 
-                        name='uq_product_location'),
+        # Una posición física solo puede existir una vez por almacén
+        UniqueConstraint('almacen_id', 'pasillo', 'lado', 'ubicacion', 'altura', 
+                        name='uq_slot_location'),
     )
 
     @property
@@ -1014,6 +1050,37 @@ class ProductLocation(Base):
         if self.stock_actual is None or self.stock_minimo is None:
             return False
         return self.stock_actual < self.stock_minimo
+    
+    @property
+    def has_stock(self) -> bool:
+        """Si la ubicación tiene stock actual o reservado."""
+        return (self.stock_actual or 0) > 0 or (self.stock_reservado or 0) > 0
+    
+    def is_available(self, db) -> bool:
+        """
+        Determina si la ubicación está disponible para asignación/reasignación.
+        
+        Disponible si:
+        - No tiene producto asignado (product_id IS NULL), O
+        - No tiene stock (actual=0 y reservado=0) Y no tiene solicitud de reposición activa
+        """
+        # Sin producto asignado → disponible directamente
+        if self.product_id is None:
+            return True
+        
+        # Tiene producto pero tiene stock → no disponible
+        if self.has_stock:
+            return False
+        
+        # Tiene producto, sin stock → verificar que no haya solicitud activa
+        has_active_request = db.query(
+            db.query(ReplenishmentRequest).filter(
+                ReplenishmentRequest.location_destino_id == self.id,
+                ReplenishmentRequest.status.in_(["READY", "IN_PROGRESS"]),
+            ).exists()
+        ).scalar()
+        
+        return not has_active_request
 
 
 class ReplenishmentRequest(Base):
@@ -1023,7 +1090,6 @@ class ReplenishmentRequest(Base):
     Created automatically from PDA (WebSocket) when operator finds location without stock.
     
     States:
-    - WAITING_STOCK: No stock available in replenishment zone
     - READY: Stock available, ready to execute
     - IN_PROGRESS: Replenishment operator executing
     - COMPLETED: Replenishment completed, stock updated
@@ -1042,11 +1108,11 @@ class ReplenishmentRequest(Base):
     requested_quantity = Column(Integer, nullable=False)
     actual_quantity = Column(Integer, nullable=True)  # Cantidad realmente movida (puede ser menor que requested)
     
-    # WAITING_STOCK, READY, IN_PROGRESS, COMPLETED, REJECTED
-    status = Column(String(20), nullable=False, default="WAITING_STOCK", index=True)
+    # READY, IN_PROGRESS, COMPLETED, REJECTED
+    status = Column(String(20), nullable=False, default="READY", index=True)
     
-    # URGENT, HIGH, NORMAL
-    priority = Column(String(20), nullable=False, default="NORMAL", index=True)
+    # URGENT, HIGH
+    priority = Column(String(20), nullable=False, default="HIGH", index=True)
     
     requester_id = Column(Integer, ForeignKey("operators.id", ondelete="NO ACTION"), nullable=False, index=True)
     executor_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True, index=True)
@@ -1180,9 +1246,62 @@ class APIMatricula(Base):
         return f"<APIMatricula box_number={self.box_number} status={self.status}>"
 
 
+class OrderLineStockAssignment(Base):
+    """
+    Asignación de stock de una ubicación de picking a una línea de orden.
+    
+    Permite que una línea de orden reserve stock de múltiples ubicaciones
+    cuando ninguna ubicación individual tiene suficiente stock.
+    
+    Ejemplo: Línea pide 10 uds
+      - Assignment 1: PICK-A01 → 6 uds reservadas
+      - Assignment 2: PICK-A02 → 4 uds reservadas
+    """
+    __tablename__ = "order_line_stock_assignments"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    order_line_id = Column(
+        Integer,
+        ForeignKey("order_lines.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    
+    product_location_id = Column(
+        Integer,
+        ForeignKey("product_locations.id", ondelete="NO ACTION"),
+        nullable=False,
+        index=True
+    )
+    
+    # Cantidad reservada de esta ubicación para esta línea
+    cantidad_reservada = Column(Integer, nullable=False)
+    
+    # Cantidad realmente recogida de esta ubicación (se actualiza durante picking)
+    cantidad_servida = Column(Integer, default=0, nullable=False)
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    # Relationships
+    order_line = relationship("OrderLine", backref="stock_assignments")
+    product_location = relationship("ProductLocation", backref="stock_assignments")
+    
+    __table_args__ = (
+        Index('idx_assignment_line_location', 'order_line_id', 'product_location_id'),
+    )
+    
+    def __repr__(self):
+        return (
+            f"<OrderLineStockAssignment line={self.order_line_id} "
+            f"loc={self.product_location_id} reservada={self.cantidad_reservada} "
+            f"servida={self.cantidad_servida}>"
+        )
+
+
 class StockMovement(Base):
     """
-    Registro de auditoría de movimientos de stock por órdenes.
+    Registro de auditoría de movimientos de stock.
     
     Tipos de movimiento:
     - RESERVE: Stock reservado por orden (PENDING/ASSIGNED/IN_PICKING)
@@ -1191,6 +1310,9 @@ class StockMovement(Base):
     - ADJUSTMENT: Ajuste manual de stock
     - MOVE_OUT: Stock movido desde esta ubicación a otra
     - MOVE_IN: Stock recibido en esta ubicación desde otra
+    - REPLENISHMENT_OUT: Stock movido desde REPO (origen) por reposición completada
+    - REPLENISHMENT_IN: Stock recibido en picking (destino) por reposición completada
+    - REPLENISHMENT_CANCEL: Reserva liberada en REPO por reposición rechazada
     """
     __tablename__ = "stock_movements"
     
@@ -1228,7 +1350,15 @@ class StockMovement(Base):
         index=True
     )
     
-    # RESERVE, DEDUCT, RELEASE, ADJUSTMENT
+    # Solicitud de reposición relacionada (NULL para movimientos de órdenes)
+    replenishment_request_id = Column(
+        Integer,
+        ForeignKey("replenishment_requests.id", ondelete="NO ACTION"),
+        nullable=True,
+        index=True
+    )
+    
+    # RESERVE, DEDUCT, RELEASE, ADJUSTMENT, REPLENISHMENT_OUT, REPLENISHMENT_IN, REPLENISHMENT_CANCEL
     tipo = Column(String(30), nullable=False, index=True)
     
     # Cantidad del movimiento (positivo o negativo)
@@ -1247,6 +1377,7 @@ class StockMovement(Base):
     product = relationship("ProductReference", backref="stock_movement_records")
     order = relationship("Order", backref="stock_movements")
     order_line = relationship("OrderLine", backref="stock_movements")
+    replenishment_request = relationship("ReplenishmentRequest", backref="stock_movements")
     
     __table_args__ = (
         Index('idx_stock_mov_tipo_created', 'tipo', 'created_at'),

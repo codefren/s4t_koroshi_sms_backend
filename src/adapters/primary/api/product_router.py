@@ -9,10 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 from typing import Optional
+from datetime import datetime, timedelta
 import math
 
-from src.adapters.secondary.database.config import SessionLocal
-from src.adapters.secondary.database.orm import ProductReference, ProductLocation, EAN
+from src.adapters.secondary.database.config import SessionLocal, ALMACEN_PICKING_ID, ALMACEN_REPOSICION_ID, get_db
+from src.adapters.secondary.database.orm import ProductReference, ProductLocation, EAN, StockMovement, OrderLine, Order, OrderStatus, ReplenishmentRequest
 from src.core.domain.models import ProductLocationCreate, ProductLocationResponse
 from src.core.domain.product_api_models import (
     ProductListResponse,
@@ -23,7 +24,11 @@ from src.core.domain.product_api_models import (
     LocationItem,
     ProductStatusFilter,
     calculate_product_status,
-    format_location_code
+    format_location_code,
+    StaleProductsResponse,
+    StaleProductItem,
+    OutOfStockResponse,
+    OutOfStockItem,
 )
 
 
@@ -604,3 +609,178 @@ def create_product_location(
         created_at=new_location.created_at,
         updated_at=new_location.updated_at
     )
+
+
+# ============================================================================
+# ENDPOINT: PRODUCTOS ESTANCADOS (STALE)
+# ============================================================================
+
+@router.get("/stale", response_model=StaleProductsResponse)
+def get_stale_products(
+    days: int = Query(default=14, ge=1, le=365, description="Días sin movimiento para considerar estancado"),
+    db: Session = Depends(get_db),
+):
+    """
+    Productos en almacén de picking (ID=3) sin movimiento en los últimos N días.
+    
+    Identifica ubicaciones ocupadas donde no ha habido ningún StockMovement
+    en el período especificado. Útil para detectar ubicaciones candidatas
+    a liberar manualmente.
+    """
+    threshold_date = datetime.utcnow() - timedelta(days=days)
+    
+    # Ubicaciones ocupadas en picking
+    picking_locations = (
+        db.query(ProductLocation)
+        .filter(
+            ProductLocation.almacen_id == ALMACEN_PICKING_ID,
+            ProductLocation.product_id.isnot(None),
+            ProductLocation.activa == True,
+        )
+        .options(joinedload(ProductLocation.product))
+        .all()
+    )
+    
+    stale_items = []
+    
+    for loc in picking_locations:
+        if not loc.product:
+            continue
+        
+        # Buscar último movimiento para este producto en esta ubicación
+        last_movement = (
+            db.query(func.max(StockMovement.created_at))
+            .filter(
+                StockMovement.product_location_id == loc.id,
+            )
+            .scalar()
+        )
+        
+        # Si nunca hubo movimiento o fue antes del umbral → estancado
+        if last_movement is None or last_movement < threshold_date:
+            dias_sin_mov = (
+                (datetime.utcnow() - last_movement).days
+                if last_movement else 999
+            )
+            
+            stale_items.append(StaleProductItem(
+                product_id=loc.product_id,
+                referencia=loc.product.referencia,
+                nombre_producto=loc.product.nombre_producto,
+                sku=loc.product.sku,
+                color_id=loc.product.color_id,
+                talla=loc.product.talla,
+                location_id=loc.id,
+                codigo_ubicacion=loc.codigo_ubicacion,
+                pasillo=loc.pasillo,
+                lado=loc.lado,
+                ubicacion=loc.ubicacion,
+                altura=loc.altura,
+                stock_actual=loc.stock_actual or 0,
+                stock_reservado=loc.stock_reservado or 0,
+                ultimo_movimiento=last_movement.isoformat() if last_movement else None,
+                dias_sin_movimiento=dias_sin_mov,
+            ))
+    
+    # Ordenar por días sin movimiento (más estancados primero)
+    stale_items.sort(key=lambda x: x.dias_sin_movimiento, reverse=True)
+    
+    return StaleProductsResponse(
+        total=len(stale_items),
+        threshold_days=days,
+        items=stale_items,
+    )
+
+
+# ============================================================================
+# ENDPOINT: PRODUCTOS SIN STOCK PARA CUMPLIR ÓRDENES
+# ============================================================================
+
+@router.get("/out-of-stock-orders", response_model=OutOfStockResponse)
+def get_out_of_stock_for_orders(
+    db: Session = Depends(get_db),
+):
+    """
+    Productos requeridos por órdenes pendientes que NO tienen stock
+    en ningún almacén (ni PICKING ni REPO).
+    
+    Busca líneas de orden sin reservar en órdenes PENDING/ASSIGNED/IN_PICKING,
+    agrupa por producto y verifica stock total en todos los almacenes.
+    """
+    # 1. Obtener IDs de estados de órdenes activas
+    active_status_ids = (
+        db.query(OrderStatus.id)
+        .filter(OrderStatus.codigo.in_(["PENDING", "ASSIGNED", "IN_PICKING"]))
+        .all()
+    )
+    status_id_list = [s[0] for s in active_status_ids]
+    
+    if not status_id_list:
+        return OutOfStockResponse(total=0, items=[])
+    
+    # 2. Líneas sin reservar agrupadas por producto
+    unreserved = (
+        db.query(
+            OrderLine.product_reference_id,
+            func.sum(OrderLine.cantidad_solicitada).label("cantidad_pendiente"),
+            func.count(func.distinct(OrderLine.order_id)).label("ordenes_afectadas"),
+        )
+        .join(Order, Order.id == OrderLine.order_id)
+        .filter(
+            Order.status_id.in_(status_id_list),
+            OrderLine.stock_reserved == False,
+            OrderLine.product_reference_id.isnot(None),
+        )
+        .group_by(OrderLine.product_reference_id)
+        .all()
+    )
+    
+    if not unreserved:
+        return OutOfStockResponse(total=0, items=[])
+    
+    # 3. Para cada producto, verificar stock total en TODOS los almacenes
+    items = []
+    for row in unreserved:
+        product_id = row.product_reference_id
+        
+        total_stock = (
+            db.query(func.coalesce(func.sum(ProductLocation.stock_actual), 0))
+            .filter(
+                ProductLocation.product_id == product_id,
+                ProductLocation.activa == True,
+            )
+            .scalar()
+        )
+        
+        if total_stock > 0:
+            continue
+        
+        # Sin stock en ningún almacén
+        product = db.query(ProductReference).filter_by(id=product_id).first()
+        if not product:
+            continue
+        
+        # Verificar si ya tiene solicitud de reposición activa
+        has_replenishment = (
+            db.query(ReplenishmentRequest.id)
+            .filter(
+                ReplenishmentRequest.product_id == product_id,
+                ReplenishmentRequest.status.in_(["READY", "IN_PROGRESS"]),
+            )
+            .first()
+        ) is not None
+        
+        items.append(OutOfStockItem(
+            product_id=product_id,
+            referencia=product.referencia,
+            nombre_producto=product.nombre_producto,
+            sku=product.sku if hasattr(product, 'sku') else None,
+            cantidad_pendiente=row.cantidad_pendiente,
+            ordenes_afectadas=row.ordenes_afectadas,
+            tiene_solicitud_reposicion=has_replenishment,
+        ))
+    
+    # Ordenar por cantidad pendiente (mayor primero)
+    items.sort(key=lambda x: x.cantidad_pendiente, reverse=True)
+    
+    return OutOfStockResponse(total=len(items), items=items)

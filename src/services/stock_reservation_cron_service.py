@@ -17,11 +17,11 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from src.adapters.secondary.database.config import (
     SessionLocal,
-    ALMACEN_REPOSICION_ID,
     ALMACEN_PICKING_ID,
     CRON_INTERVAL_MINUTES,
     SYSTEM_OPERATOR_CODE
@@ -29,17 +29,20 @@ from src.adapters.secondary.database.config import (
 from src.adapters.secondary.database.orm import (
     Order,
     OrderLine,
+    OrderLineStockAssignment,
     OrderStatus,
     ProductLocation,
+    ProductReference,
     StockMovement,
     ReplenishmentRequest,
     Operator,
 )
+from src.services.replenishment_service import create_or_upgrade_replenishment
 
 logger = logging.getLogger(__name__)
 
 # Estados de orden donde se reserva stock
-RESERVATION_STATUS_CODES = ["PENDING", "ASSIGNED", "IN_PICKING"]
+RESERVATION_STATUS_CODES = ["PENDING", "ASSIGNED"]
 
 
 class StockReservationCronService:
@@ -47,7 +50,7 @@ class StockReservationCronService:
     Servicio cron para reserva automática de stock en órdenes.
     
     Responsabilidades:
-        - Buscar órdenes en PENDING/ASSIGNED/IN_PICKING con líneas sin reserva
+        - Buscar órdenes en PENDING/ASSIGNED con líneas sin reserva
         - Asignar product_location_id de picking a cada línea
         - Incrementar stock_reservado en la ubicación
         - Crear registros de auditoría (StockMovement)
@@ -101,9 +104,9 @@ class StockReservationCronService:
         status_ids = self.db.query(OrderStatus.id).filter(
             OrderStatus.codigo.in_(RESERVATION_STATUS_CODES)
         ).all()
-        status_id_list = [s[0] for s in status_ids]
+        self.status_id_list = [s[0] for s in status_ids]
         
-        if not status_id_list:
+        if not self.status_id_list:
             logger.warning("  [STOCK-CRON] No se encontraron estados de reserva en BD")
             return
         
@@ -111,7 +114,7 @@ class StockReservationCronService:
         orders = (
             self.db.query(Order)
             .filter(
-                Order.status_id.in_(status_id_list),
+                Order.status_id.in_(self.status_id_list),
             )
             .options(joinedload(Order.order_lines))
             .all()
@@ -136,111 +139,162 @@ class StockReservationCronService:
     
     def _reserve_order_lines(self, order: Order):
         """
-        Reserva stock para cada línea de la orden que no tenga reserva.
+        Reserva stock para cada línea de la orden que no tenga reserva completa.
+        
+        Soporta reserva multi-ubicación: si ninguna ubicación individual tiene
+        suficiente stock pero la suma sí, distribuye la reserva entre varias.
+        Si hay stock parcial, reserva lo disponible y crea reposición por el déficit.
+        
+        Usa la suma de assignments para determinar cuánto ya está reservado,
+        permitiendo completar reservas parciales tras reposiciones.
         """
         for line in order.order_lines:
-            # Saltar líneas ya reservadas
-            if line.stock_reserved:
-                continue
-            
             # Saltar líneas sin producto asociado
             if not line.product_reference_id:
                 self.stats["lines_skipped_no_product"] += 1
                 continue
             
-            # Buscar ubicación en picking con stock disponible
-            location = self._find_available_picking_location(
-                line.product_reference_id,
-                line.cantidad_solicitada
+            # Calcular cuánto ya está reservado via assignments
+            total_already_reserved = sum(
+                a.cantidad_reservada for a in
+                self.db.query(OrderLineStockAssignment)
+                .filter_by(order_line_id=line.id).all()
             )
             
-            if not location:
+            cantidad_needed = line.cantidad_solicitada - total_already_reserved
+            if cantidad_needed <= 0:
+                continue  # Ya completamente reservada
+            
+            # Buscar TODAS las ubicaciones picking con stock disponible
+            locations = self._find_available_picking_locations(
+                line.product_reference_id
+            )
+            
+            total_available = sum(
+                (loc.stock_actual or 0) - (loc.stock_reservado or 0)
+                for loc in locations
+            )
+            
+            if total_available > 0:
+                # Reservar lo disponible (parcial o completo)
+                reserved = self._reserve_line_multi(
+                    order, line, locations, cantidad_needed
+                )
+                
+                deficit = cantidad_needed - reserved
+                if deficit > 0:
+                    # Parcial → crear reposición por lo que falta
+                    self._create_or_upgrade_replenishment_request(
+                        line.product_reference_id,
+                        deficit,
+                        order
+                    )
+            else:
+                # Nada disponible → reposición por lo que falta
                 self.stats["lines_skipped_no_stock"] += 1
-                # Sin stock en picking → crear/actualizar solicitud de reposición URGENT
                 self._create_or_upgrade_replenishment_request(
                     line.product_reference_id,
-                    line.cantidad_solicitada,
+                    cantidad_needed,
                     order
                 )
-                continue
-            
-            # Reservar
-            self._reserve_line(order, line, location)
     
-    def _find_available_picking_location(
-        self, product_id: int, cantidad_needed: int
-    ) -> Optional[ProductLocation]:
+    def _find_available_picking_locations(
+        self, product_id: int
+    ) -> List[ProductLocation]:
         """
-        Busca una ubicación en el almacén de picking con stock disponible suficiente.
-        
-        Prioriza por:
-        1. Prioridad de ubicación (menor = más prioritaria)
-        2. Stock disponible (MENOR primero - optimiza rotación)
+        Busca TODAS las ubicaciones picking del producto con stock disponible.
+        Ordenadas por stock disponible descendente (mayor primero).
         """
-        locations = (
+        available_stock = (
+            ProductLocation.stock_actual - func.coalesce(ProductLocation.stock_reservado, 0)
+        )
+        return (
             self.db.query(ProductLocation)
             .filter(
                 ProductLocation.product_id == product_id,
                 ProductLocation.almacen_id == ALMACEN_PICKING_ID,
                 ProductLocation.activa == True,
+                available_stock > 0,
             )
-            .order_by(
-                ProductLocation.prioridad.asc(),
-                ProductLocation.stock_actual.asc()
-            )
+            .order_by(available_stock.desc())
             .all()
         )
-        
-        for loc in locations:
-            disponible = (loc.stock_actual or 0) - (loc.stock_reservado or 0)
-            if disponible >= cantidad_needed:
-                return loc
-        
-        return None
     
-    def _reserve_line(
-        self, order: Order, line: OrderLine, location: ProductLocation
-    ):
+    def _reserve_line_multi(
+        self, order: Order, line: OrderLine,
+        locations: List[ProductLocation], cantidad_needed: int
+    ) -> int:
         """
-        Ejecuta la reserva de stock para una línea:
-        - Asigna product_location_id
-        - Marca stock_reserved = True
-        - Incrementa stock_reservado en la ubicación
-        - Crea StockMovement de auditoría
-        """
-        stock_antes = location.stock_reservado or 0
+        Reserva stock distribuyendo entre múltiples ubicaciones.
         
-        # Actualizar línea
-        line.product_location_id = location.id
+        - product_location_id apunta a la ubicación con más stock (la primera)
+        - stock_reservado se incrementa proporcionalmente en cada ubicación
+        - Crea un OrderLineStockAssignment por cada ubicación usada
+        - Crea un StockMovement de auditoría por cada ubicación usada
+        
+        Args:
+            cantidad_needed: Cantidad que falta por reservar (puede ser < cantidad_solicitada
+                           si es una reserva complementaria tras reposición)
+        
+        Returns:
+            Total de unidades efectivamente reservadas
+        """
+        # Asignar ubicación principal si no tiene una
+        if not line.product_location_id:
+            line.product_location_id = locations[0].id
         line.stock_reserved = True
         
-        # Incrementar reserva en ubicación
-        location.stock_reservado = stock_antes + line.cantidad_solicitada
+        remaining = cantidad_needed
+        total_reserved = 0
         
-        # Crear registro de auditoría
-        movement = StockMovement(
-            product_location_id=location.id,
-            product_id=line.product_reference_id,
-            order_id=order.id,
-            order_line_id=line.id,
-            tipo="RESERVE",
-            cantidad=line.cantidad_solicitada,
-            stock_antes=location.stock_actual or 0,
-            stock_despues=location.stock_actual or 0,  # stock_actual no cambia en reserva
-            notas=f"Reserva automática para orden {order.numero_orden}, "
-                  f"línea #{line.id}, cantidad: {line.cantidad_solicitada}, "
-                  f"ubicación: {location.codigo_ubicacion}",
-        )
-        self.db.add(movement)
+        for loc in locations:
+            if remaining <= 0:
+                break
+            
+            disponible = (loc.stock_actual or 0) - (loc.stock_reservado or 0)
+            take = min(remaining, disponible)
+            if take <= 0:
+                continue
+            
+            stock_reservado_antes = loc.stock_reservado or 0
+            loc.stock_reservado = stock_reservado_antes + take
+            remaining -= take
+            total_reserved += take
+            
+            # Crear assignment para trazabilidad multi-ubicación
+            assignment = OrderLineStockAssignment(
+                order_line_id=line.id,
+                product_location_id=loc.id,
+                cantidad_reservada=take,
+                cantidad_servida=0,
+            )
+            self.db.add(assignment)
+            
+            # Auditoría por cada ubicación
+            movement = StockMovement(
+                product_location_id=loc.id,
+                product_id=line.product_reference_id,
+                order_id=order.id,
+                order_line_id=line.id,
+                tipo="RESERVE",
+                cantidad=take,
+                stock_antes=loc.stock_actual or 0,
+                stock_despues=loc.stock_actual or 0,
+                notas=f"Reserva para orden {order.numero_orden}, "
+                      f"línea #{line.id}, cantidad: {take}/{cantidad_needed}, "
+                      f"ubicación: {loc.codigo_ubicacion}",
+            )
+            self.db.add(movement)
+            
+            logger.info(
+                f"    ✓ Reserva: orden={order.numero_orden} línea={line.id} "
+                f"producto={line.product_reference_id} ubicación={loc.codigo_ubicacion} "
+                f"cantidad={take}/{cantidad_needed} "
+                f"stock_reservado: {stock_reservado_antes}→{loc.stock_reservado}"
+            )
         
         self.stats["lines_reserved"] += 1
-        
-        logger.info(
-            f"    ✓ Reserva: orden={order.numero_orden} línea={line.id} "
-            f"producto={line.product_reference_id} ubicación={location.codigo_ubicacion} "
-            f"cantidad={line.cantidad_solicitada} "
-            f"stock_reservado: {stock_antes}→{location.stock_reservado}"
-        )
+        return total_reserved
     
     def _find_picking_destination(self, product_id: int) -> Optional[ProductLocation]:
         """
@@ -258,22 +312,6 @@ class StockReservationCronService:
             .first()
         )
     
-    def _find_replenishment_origin(self, product_id: int) -> Optional[ProductLocation]:
-        """
-        Busca ubicación con stock en almacén de reposición (ID=1).
-        """
-        return (
-            self.db.query(ProductLocation)
-            .filter(
-                ProductLocation.product_id == product_id,
-                ProductLocation.almacen_id == ALMACEN_REPOSICION_ID,
-                ProductLocation.activa == True,
-                ProductLocation.stock_actual > 0,
-            )
-            .order_by(ProductLocation.stock_actual.desc())
-            .first()
-        )
-    
     def _create_or_upgrade_replenishment_request(
         self,
         product_id: int,
@@ -281,45 +319,9 @@ class StockReservationCronService:
         order: Order,
     ):
         """
-        Si ya existe solicitud pendiente para este producto en picking:
-            → cambiar prioridad a HIGH
-        Si no existe:
-            → crear nueva solicitud HIGH (READY si hay stock en reposición, WAITING_STOCK si no)
+        Delega la creación de solicitudes de reposición al servicio compartido.
+        Actualiza las estadísticas del cron con el resultado.
         """
-        # Buscar ubicación destino en picking
-        dest_location = self._find_picking_destination(product_id)
-        if not dest_location:
-            return  # Sin ubicación en picking para este producto
-        
-        # Verificar si ya existe solicitud pendiente para este producto+destino
-        existing = self.db.query(ReplenishmentRequest).filter(
-            ReplenishmentRequest.product_id == product_id,
-            ReplenishmentRequest.location_destino_id == dest_location.id,
-            ReplenishmentRequest.status.in_(["WAITING_STOCK", "READY", "IN_PROGRESS"]),
-        ).first()
-        
-        if existing:
-            # Ya existe → escalar a HIGH si no lo es
-            if existing.priority != "HIGH":
-                existing.priority = "HIGH"
-                existing.updated_at = datetime.utcnow()
-                logger.info(
-                    f"    ⬆ Solicitud #{existing.id} escalada a HIGH "
-                    f"(producto={product_id}, orden={order.numero_orden})"
-                )
-                self.stats["replenishment_upgraded"] += 1
-            return
-        
-        # No existe → crear nueva solicitud HIGH
-        origin_location = self._find_replenishment_origin(product_id)
-        
-        if origin_location:
-            status = "READY"
-            origin_id = origin_location.id
-        else:
-            status = "WAITING_STOCK"
-            origin_id = None
-        
         # Obtener operador SYSTEM
         system_operator = self.db.query(Operator).filter(
             Operator.codigo == SYSTEM_OPERATOR_CODE
@@ -332,29 +334,22 @@ class StockReservationCronService:
             )
             return
         
-        deficit = max(cantidad_needed, (dest_location.stock_minimo or 0) - (dest_location.stock_actual or 0), 1)
-        
-        new_request = ReplenishmentRequest(
-            location_origen_id=origin_id,
-            location_destino_id=dest_location.id,
+        result = create_or_upgrade_replenishment(
+            db=self.db,
             product_id=product_id,
-            requested_quantity=deficit,
-            status=status,
-            priority="URGENT",
             requester_id=system_operator.id,
-            requested_at=datetime.utcnow(),
+            priority="HIGH",
+            order_id=order.id,
+            cantidad_needed=cantidad_needed,
+            status_id_list=self.status_id_list,
         )
         
-        self.db.add(new_request)
-        self.db.flush()
+        # Actualizar estadísticas del cron
+        self.stats["replenishment_created"] += len(result.created_requests)
+        self.stats["replenishment_upgraded"] += len(result.upgraded_requests)
         
-        logger.info(
-            f"    🆕 Solicitud #{new_request.id} URGENT creada "
-            f"(producto={product_id}, destino={dest_location.codigo_ubicacion}, "
-            f"estado={status}, cantidad={deficit}, "
-            f"origen orden={order.numero_orden})"
-        )
-        self.stats["replenishment_created"] += 1
+        if result.status == "no_locations":
+            self.stats["errors"] += 1
     
     def _log_stats(self):
         """Log de estadísticas del ciclo."""
@@ -388,10 +383,8 @@ def deduct_stock_for_order(order: Order, db: Session) -> List[Dict]:
     """
     Descuenta stock_actual y libera stock_reservado al pasar orden a READY.
     
-    Para cada order_line con stock reservado:
-    - stock_actual -= cantidad_servida (lo realmente recogido)
-    - stock_reservado -= cantidad_solicitada (libera la reserva)
-    - Crea StockMovement tipo DEDUCT
+    Usa stock_assignments para saber exactamente cuánto descontar de cada ubicación.
+    Fallback: si no hay assignments, usa product_location_id (compatibilidad).
     
     Returns:
         Lista de diccionarios con detalle de cada descuento realizado
@@ -399,73 +392,152 @@ def deduct_stock_for_order(order: Order, db: Session) -> List[Dict]:
     deductions = []
     
     for line in order.order_lines:
-        if not line.product_location_id or not line.stock_reserved:
+        if not line.stock_reserved:
             continue
         
-        location = db.get(ProductLocation, line.product_location_id)
-        if not location:
-            logger.warning(
-                f"  [DEDUCT] Ubicación {line.product_location_id} no encontrada "
-                f"para línea #{line.id} de orden {order.numero_orden}"
+        assignments = (
+            db.query(OrderLineStockAssignment)
+            .filter_by(order_line_id=line.id)
+            .all()
+        )
+        
+        if assignments:
+            # Multi-ubicación: descontar por assignment
+            for assignment in assignments:
+                location = db.get(ProductLocation, assignment.product_location_id)
+                if not location:
+                    logger.warning(
+                        f"  [DEDUCT] Ubicación {assignment.product_location_id} no encontrada "
+                        f"para línea #{line.id} de orden {order.numero_orden}"
+                    )
+                    continue
+                
+                cantidad_deducir = assignment.cantidad_servida or 0
+                stock_antes = location.stock_actual or 0
+                reservado_antes = location.stock_reservado or 0
+                
+                location.stock_actual = max(0, stock_antes - cantidad_deducir)
+                location.stock_reservado = max(0, reservado_antes - assignment.cantidad_reservada)
+                
+                db.add(StockMovement(
+                    product_location_id=location.id,
+                    product_id=line.product_reference_id,
+                    order_id=order.id,
+                    order_line_id=line.id,
+                    tipo="DEDUCT",
+                    cantidad=-cantidad_deducir,
+                    stock_antes=stock_antes,
+                    stock_despues=location.stock_actual,
+                    notas=f"Descuento por orden {order.numero_orden} completada (READY). "
+                          f"Servida: {cantidad_deducir}, Reservada: {assignment.cantidad_reservada}, "
+                          f"Ubicación: {location.codigo_ubicacion}",
+                ))
+                
+                deductions.append({
+                    "order_line_id": line.id,
+                    "product_location_id": location.id,
+                    "ubicacion": location.codigo_ubicacion,
+                    "cantidad_deducida": cantidad_deducir,
+                    "stock_antes": stock_antes,
+                    "stock_despues": location.stock_actual,
+                    "reservado_antes": reservado_antes,
+                    "reservado_despues": location.stock_reservado,
+                })
+                
+                logger.info(
+                    f"  [DEDUCT] orden={order.numero_orden} línea={line.id} "
+                    f"ubicación={location.codigo_ubicacion} "
+                    f"stock: {stock_antes}→{location.stock_actual} "
+                    f"reservado: {reservado_antes}→{location.stock_reservado}"
+                )
+                
+                _check_release_location(db, location, order)
+        else:
+            # Fallback: compatibilidad con reservas sin assignments
+            if not line.product_location_id:
+                continue
+            
+            location = db.get(ProductLocation, line.product_location_id)
+            if not location:
+                continue
+            
+            cantidad_deducir = line.cantidad_servida or 0
+            stock_antes = location.stock_actual or 0
+            reservado_antes = location.stock_reservado or 0
+            
+            location.stock_actual = max(0, stock_antes - cantidad_deducir)
+            location.stock_reservado = max(0, reservado_antes - line.cantidad_solicitada)
+            
+            db.add(StockMovement(
+                product_location_id=location.id,
+                product_id=line.product_reference_id,
+                order_id=order.id,
+                order_line_id=line.id,
+                tipo="DEDUCT",
+                cantidad=-cantidad_deducir,
+                stock_antes=stock_antes,
+                stock_despues=location.stock_actual,
+                notas=f"Descuento por orden {order.numero_orden} completada (READY). "
+                      f"Servida: {cantidad_deducir}, Solicitada: {line.cantidad_solicitada}, "
+                      f"Ubicación: {location.codigo_ubicacion} (fallback sin assignments)",
+            ))
+            
+            deductions.append({
+                "order_line_id": line.id,
+                "product_location_id": location.id,
+                "ubicacion": location.codigo_ubicacion,
+                "cantidad_deducida": cantidad_deducir,
+                "stock_antes": stock_antes,
+                "stock_despues": location.stock_actual,
+                "reservado_antes": reservado_antes,
+                "reservado_despues": location.stock_reservado,
+            })
+            
+            logger.info(
+                f"  [DEDUCT] orden={order.numero_orden} línea={line.id} "
+                f"ubicación={location.codigo_ubicacion} "
+                f"stock: {stock_antes}→{location.stock_actual} "
+                f"reservado: {reservado_antes}→{location.stock_reservado}"
             )
-            continue
+            
+            _check_release_location(db, location, order)
         
-        cantidad_deducir = line.cantidad_servida or 0
-        stock_antes = location.stock_actual or 0
-        reservado_antes = location.stock_reservado or 0
-        
-        # Descontar stock real
-        location.stock_actual = max(0, stock_antes - cantidad_deducir)
-        # Liberar reserva
-        location.stock_reservado = max(0, reservado_antes - line.cantidad_solicitada)
-        # Marcar reserva como consumida
         line.stock_reserved = False
-        
-        # Registro de auditoría
-        movement = StockMovement(
-            product_location_id=location.id,
-            product_id=line.product_reference_id,
-            order_id=order.id,
-            order_line_id=line.id,
-            tipo="DEDUCT",
-            cantidad=-cantidad_deducir,
-            stock_antes=stock_antes,
-            stock_despues=location.stock_actual,
-            notas=f"Descuento por orden {order.numero_orden} completada (READY). "
-                  f"Servida: {cantidad_deducir}, Solicitada: {line.cantidad_solicitada}, "
-                  f"Ubicación: {location.codigo_ubicacion}",
-        )
-        db.add(movement)
-        
-        deductions.append({
-            "order_line_id": line.id,
-            "product_location_id": location.id,
-            "ubicacion": location.codigo_ubicacion,
-            "cantidad_deducida": cantidad_deducir,
-            "stock_antes": stock_antes,
-            "stock_despues": location.stock_actual,
-            "reservado_antes": reservado_antes,
-            "reservado_despues": location.stock_reservado,
-        })
-        
-        logger.info(
-            f"  [DEDUCT] orden={order.numero_orden} línea={line.id} "
-            f"ubicación={location.codigo_ubicacion} "
-            f"stock: {stock_antes}→{location.stock_actual} "
-            f"reservado: {reservado_antes}→{location.stock_reservado}"
-        )
     
     return deductions
+
+
+def _check_release_location(db: Session, location: ProductLocation, order: Order):
+    """
+    Si stock_actual=0 y stock_reservado=0, verificar si hay reposición pendiente.
+    Si no hay → liberar la ubicación (product_id = NULL).
+    """
+    if (location.stock_actual or 0) == 0 and (location.stock_reservado or 0) == 0:
+        pending_replenishment = db.query(ReplenishmentRequest).filter(
+            ReplenishmentRequest.location_destino_id == location.id,
+            ReplenishmentRequest.status.in_(["READY", "IN_PROGRESS"]),
+        ).first()
+        
+        if not pending_replenishment:
+            old_product_id = location.product_id
+            old_code = location.codigo_ubicacion
+            location.product_id = None
+            location.stock_minimo = 0
+            location.ultima_actualizacion_stock = datetime.utcnow()
+            
+            logger.info(
+                f"  [RELEASE] Ubicación {old_code} liberada "
+                f"(producto anterior: {old_product_id}, "
+                f"orden: {order.numero_orden})"
+            )
 
 
 def release_stock_for_order(order: Order, db: Session) -> List[Dict]:
     """
     Libera stock_reservado al cancelar una orden.
     
-    Para cada order_line con stock reservado:
-    - stock_reservado -= cantidad_solicitada
-    - stock_actual NO cambia (no se recogió nada)
-    - Crea StockMovement tipo RELEASE
+    Usa stock_assignments para liberar de cada ubicación correctamente.
+    Fallback: si no hay assignments, usa product_location_id (compatibilidad).
     
     Returns:
         Lista de diccionarios con detalle de cada liberación realizada
@@ -473,50 +545,94 @@ def release_stock_for_order(order: Order, db: Session) -> List[Dict]:
     releases = []
     
     for line in order.order_lines:
-        if not line.product_location_id or not line.stock_reserved:
+        if not line.stock_reserved:
             continue
         
-        location = db.get(ProductLocation, line.product_location_id)
-        if not location:
-            continue
+        assignments = (
+            db.query(OrderLineStockAssignment)
+            .filter_by(order_line_id=line.id)
+            .all()
+        )
         
-        reservado_antes = location.stock_reservado or 0
+        if assignments:
+            for assignment in assignments:
+                location = db.get(ProductLocation, assignment.product_location_id)
+                if not location:
+                    continue
+                
+                reservado_antes = location.stock_reservado or 0
+                location.stock_reservado = max(0, reservado_antes - assignment.cantidad_reservada)
+                
+                db.add(StockMovement(
+                    product_location_id=location.id,
+                    product_id=line.product_reference_id,
+                    order_id=order.id,
+                    order_line_id=line.id,
+                    tipo="RELEASE",
+                    cantidad=assignment.cantidad_reservada,
+                    stock_antes=location.stock_actual or 0,
+                    stock_despues=location.stock_actual or 0,
+                    notas=f"Liberación por cancelación de orden {order.numero_orden}. "
+                          f"Cantidad liberada: {assignment.cantidad_reservada}, "
+                          f"Ubicación: {location.codigo_ubicacion}",
+                ))
+                
+                releases.append({
+                    "order_line_id": line.id,
+                    "product_location_id": location.id,
+                    "ubicacion": location.codigo_ubicacion,
+                    "cantidad_liberada": assignment.cantidad_reservada,
+                    "reservado_antes": reservado_antes,
+                    "reservado_despues": location.stock_reservado,
+                })
+                
+                logger.info(
+                    f"  [RELEASE] orden={order.numero_orden} línea={line.id} "
+                    f"ubicación={location.codigo_ubicacion} "
+                    f"reservado: {reservado_antes}→{location.stock_reservado}"
+                )
+        else:
+            # Fallback: compatibilidad con reservas sin assignments
+            if not line.product_location_id:
+                continue
+            
+            location = db.get(ProductLocation, line.product_location_id)
+            if not location:
+                continue
+            
+            reservado_antes = location.stock_reservado or 0
+            location.stock_reservado = max(0, reservado_antes - line.cantidad_solicitada)
+            
+            db.add(StockMovement(
+                product_location_id=location.id,
+                product_id=line.product_reference_id,
+                order_id=order.id,
+                order_line_id=line.id,
+                tipo="RELEASE",
+                cantidad=line.cantidad_solicitada,
+                stock_antes=location.stock_actual or 0,
+                stock_despues=location.stock_actual or 0,
+                notas=f"Liberación por cancelación de orden {order.numero_orden}. "
+                      f"Cantidad liberada: {line.cantidad_solicitada}, "
+                      f"Ubicación: {location.codigo_ubicacion} (fallback sin assignments)",
+            ))
+            
+            releases.append({
+                "order_line_id": line.id,
+                "product_location_id": location.id,
+                "ubicacion": location.codigo_ubicacion,
+                "cantidad_liberada": line.cantidad_solicitada,
+                "reservado_antes": reservado_antes,
+                "reservado_despues": location.stock_reservado,
+            })
+            
+            logger.info(
+                f"  [RELEASE] orden={order.numero_orden} línea={line.id} "
+                f"ubicación={location.codigo_ubicacion} "
+                f"reservado: {reservado_antes}→{location.stock_reservado}"
+            )
         
-        # Liberar reserva (stock_actual no cambia)
-        location.stock_reservado = max(0, reservado_antes - line.cantidad_solicitada)
-        # Quitar marca de reserva
         line.stock_reserved = False
-        
-        # Registro de auditoría
-        movement = StockMovement(
-            product_location_id=location.id,
-            product_id=line.product_reference_id,
-            order_id=order.id,
-            order_line_id=line.id,
-            tipo="RELEASE",
-            cantidad=line.cantidad_solicitada,
-            stock_antes=location.stock_actual or 0,
-            stock_despues=location.stock_actual or 0,  # No cambia
-            notas=f"Liberación por cancelación de orden {order.numero_orden}. "
-                  f"Cantidad liberada: {line.cantidad_solicitada}, "
-                  f"Ubicación: {location.codigo_ubicacion}",
-        )
-        db.add(movement)
-        
-        releases.append({
-            "order_line_id": line.id,
-            "product_location_id": location.id,
-            "ubicacion": location.codigo_ubicacion,
-            "cantidad_liberada": line.cantidad_solicitada,
-            "reservado_antes": reservado_antes,
-            "reservado_despues": location.stock_reservado,
-        })
-        
-        logger.info(
-            f"  [RELEASE] orden={order.numero_orden} línea={line.id} "
-            f"ubicación={location.codigo_ubicacion} "
-            f"reservado: {reservado_antes}→{location.stock_reservado}"
-        )
     
     return releases
 
