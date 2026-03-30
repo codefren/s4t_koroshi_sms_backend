@@ -396,6 +396,7 @@ class OrderLoaderService:
         history = OrderHistory(
             order_id=order.id,
             status_id=status.id,
+            event_type="ORDER_IMPORTED",
             accion="ORDER_IMPORTED",
             notas=f"Orden importada desde archivo CSV: {self.csv_file_path.name}",
             event_metadata={

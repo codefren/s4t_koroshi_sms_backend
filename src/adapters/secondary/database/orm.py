@@ -606,6 +606,9 @@ class OrderHistory(Base):
     operator_id = Column(Integer, ForeignKey("operators.id", ondelete="SET NULL"), nullable=True, index=True)
     
     # === INFORMACIÓN DEL EVENTO ===
+    # Tipo de evento general (requerido por la BD de producción)
+    event_type = Column(String(50), nullable=False, default="GENERAL")
+    
     # Tipo de acción que ocurrió:
     # - IMPORTED_FROM_VIEW: Orden recién importada
     # - STATUS_CHANGE: Cambio de estado
