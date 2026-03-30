@@ -726,7 +726,6 @@ def optimize_picking_route(
                     "altura": loc.altura,
                     "prioridad": loc.prioridad,
                     "stock_disponible": loc.stock_actual,
-                    "_sort_key": (loc.prioridad, loc.altura),
                 })
         elif line.product_location and line.product_location.activa:
             loc = line.product_location
@@ -743,7 +742,6 @@ def optimize_picking_route(
                 "altura": loc.altura,
                 "prioridad": loc.prioridad,
                 "stock_disponible": loc.stock_actual,
-                "_sort_key": (loc.prioridad, loc.altura),
             })
         else:
             lines_without_location.append({
@@ -755,10 +753,8 @@ def optimize_picking_route(
     picking_route = []
     secuencia = 1
     
-    for pasillo in sorted(stops_by_aisle.keys()):
-        sorted_stops = sorted(stops_by_aisle[pasillo], key=lambda x: x["_sort_key"])
-        for stop in sorted_stops:
-            stop.pop("_sort_key", None)
+    for pasillo in sorted(stops_by_aisle.keys(), key=lambda p: (int(p) if p and p.isdigit() else float('inf'), p or '')):
+        for stop in stops_by_aisle[pasillo]:
             stop["secuencia"] = secuencia
             picking_route.append(stop)
             secuencia += 1
