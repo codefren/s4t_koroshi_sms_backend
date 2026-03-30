@@ -1021,8 +1021,8 @@ class ProductLocation(Base):
         Index('idx_stock_bajo', 'stock_actual', 'stock_minimo'),
         # Índice para ubicaciones activas con prioridad
         Index('idx_activa_prioridad', 'activa', 'prioridad'),
-        # Una posición física solo puede existir una vez por almacén
-        UniqueConstraint('almacen_id', 'pasillo', 'lado', 'ubicacion', 'altura', 
+        # Una posición física + producto solo puede existir una vez por almacén
+        UniqueConstraint('almacen_id', 'product_id', 'pasillo', 'lado', 'ubicacion', 'altura', 
                         name='uq_slot_location'),
     )
 
