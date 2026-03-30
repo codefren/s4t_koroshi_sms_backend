@@ -230,20 +230,28 @@ class UbicacionImporter:
         
         # Leer y procesar CSV
         try:
-            with open(self.csv_file_path, 'r', encoding='utf-8') as csvfile:
-                # Detectar delimitador (punto y coma)
-                reader = csv.DictReader(csvfile, delimiter=';')
+            # utf-8-sig maneja BOM automáticamente
+            with open(self.csv_file_path, 'r', encoding='utf-8-sig') as csvfile:
+                # Leer primera línea para detectar si tiene headers
+                first_line = csvfile.readline().strip()
+                csvfile.seek(0)
                 
-                # Validar headers
-                expected_headers = {'sku', 'pasillo', 'ubicacion', 'stock_actual'}
-                if not expected_headers.issubset(set(reader.fieldnames)):
-                    print(f"❌ ERROR: Headers incorrectos en CSV")
-                    print(f"   Esperados: {expected_headers}")
-                    print(f"   Encontrados: {set(reader.fieldnames)}")
-                    return False
+                expected_headers = ['sku', 'pasillo', 'ubicacion', 'stock_actual']
+                first_fields = [f.strip().lower() for f in first_line.split(';')]
+                
+                has_header = set(expected_headers).issubset(set(first_fields))
+                
+                if has_header:
+                    reader = csv.DictReader(csvfile, delimiter=';')
+                    start_line = 2
+                else:
+                    # CSV sin headers: asignar nombres de columna manualmente
+                    reader = csv.DictReader(csvfile, fieldnames=expected_headers, delimiter=';')
+                    start_line = 1
+                    print("ℹ️  CSV sin cabecera detectado, usando columnas: sku;pasillo;ubicacion;stock_actual")
                 
                 # Procesar cada línea
-                for line_num, row in enumerate(reader, start=2):  # start=2 porque línea 1 es header
+                for line_num, row in enumerate(reader, start=start_line):
                     self.total_lines += 1
                     
                     # Parsear línea
