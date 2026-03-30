@@ -115,6 +115,7 @@ class StockReservationCronService:
             self.db.query(Order)
             .filter(
                 Order.status_id.in_(self.status_id_list),
+                Order.almacen_id == ALMACEN_PICKING_ID,
             )
             .options(joinedload(Order.order_lines))
             .all()
