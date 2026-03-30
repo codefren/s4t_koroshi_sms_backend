@@ -1,13 +1,28 @@
 import os
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import sentry_sdk
+from starlette.types import ASGIApp, Receive, Scope, Send
 from guard.middleware import SecurityMiddleware
 from src.adapters.secondary.database.config import engine, Base
 from src.config.security import get_security_config
+
+
+class WebSocketBypassSecurityMiddleware:
+    """Wraps SecurityMiddleware but bypasses it for WebSocket connections."""
+    
+    def __init__(self, app: ASGIApp, **kwargs):
+        self.app = app
+        self.security = SecurityMiddleware(app, **kwargs)
+    
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
+        else:
+            await self.security(scope, receive, send)
 
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN", ""),
@@ -42,7 +57,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="FastAPI Hexagonal ODBC", lifespan=lifespan)
 
 # Security middleware (inner - processes after CORS)
-app.add_middleware(SecurityMiddleware, config=get_security_config())
+# WebSocketBypassSecurityMiddleware skips guard for WS connections
+app.add_middleware(WebSocketBypassSecurityMiddleware, config=get_security_config())
 
 # CORS Middleware (outer/outermost - processes first, handles OPTIONS preflight)
 # In Starlette, the LAST added middleware is the OUTERMOST and runs first
@@ -84,14 +100,23 @@ app.include_router(ws_router)
 app.include_router(operator_ws_router, tags=["WebSocket PDA"])
 app.include_router(api_service_router, prefix="/api/service", tags=["B2B Service API"])
 
-@app.get("/")
+class RootResponse(BaseModel):
+    message: str
+    version: str
+    status: str
+    endpoints: dict[str, str]
+
+class HealthResponse(BaseModel):
+    status: str
+
+@app.get("/", response_model=RootResponse)
 def root():
     """Endpoint raíz de la API."""
-    return {
-        "message": "S4T Koroshi SMS Backend API",
-        "version": "1.0.0",
-        "status": "running",
-        "endpoints": {
+    return RootResponse(
+        message="S4T Koroshi SMS Backend API",
+        version="1.0.0",
+        status="running",
+        endpoints={
             "docs": "/docs",
             "health": "/health",
             "orders": "/api/v1/orders",
@@ -101,12 +126,13 @@ def root():
             "replenishment": "/api/v1/replenishment",
             "stock_movements": "/api/v1/stock-movements"
         }
-    }
+    )
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse)
 def health_check():
-    return {"status": "ok"}
+    return HealthResponse(status="ok")
 
-@app.get("/sentry-debug")
-async def trigger_error():
-    division_by_zero = 1 / 0
+if os.getenv("ENVIRONMENT") != "production":
+    @app.get("/sentry-debug")
+    async def trigger_error():
+        division_by_zero = 1 / 0
