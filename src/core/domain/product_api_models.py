@@ -269,11 +269,26 @@ def format_location_code(pasillo: str, lado: str, ubicacion: str, altura: int) -
     Returns:
         String formateado
     """
-    # Abreviar lado
-    lado_short = "Der" if lado.upper() == "DERECHA" else "Izq"
+    # Abreviar lado (puede ser None si no se tiene la info)
+    if lado:
+        lado_short = "Der" if lado.upper() == "DERECHA" else "Izq"
+    else:
+        lado_short = None
     
-    # Formatear estante (usando pasillo como prefijo + ubicación)
-    estante = f"{pasillo}{altura}-{ubicacion}"
+    # Construir código base
+    parts = []
+    if pasillo and ubicacion:
+        parts.append(f"{pasillo}-{ubicacion}")
+    elif pasillo:
+        parts.append(pasillo)
+    elif ubicacion:
+        parts.append(ubicacion)
+    
+    if lado_short:
+        parts.append(lado_short)
+    
+    if altura is not None and pasillo:
+        parts.append(f"{pasillo}{altura}-{ubicacion or ''}")
     
     # Formato final
-    return f"{pasillo}-{ubicacion}, {lado_short}, {estante}"
+    return ", ".join(parts) if parts else ""
