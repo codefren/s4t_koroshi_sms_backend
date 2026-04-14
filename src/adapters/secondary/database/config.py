@@ -23,7 +23,7 @@ ALMACEN_PICKING_ID = int(os.getenv('ALMACEN_PICKING_ID', '4'))  # Zona de pickin
 ALMACEN_REPOSICION_ID = int(os.getenv('ALMACEN_REPOSICION_ID', '3'))  # Zona de reposición (origen) — REPO
 
 # Cron Services Configuration
-CRON_INTERVAL_MINUTES = int(os.getenv('CRON_INTERVAL_MINUTES', '2'))  # Frecuencia de ejecución de crons
+CRON_INTERVAL_MINUTES = int(os.getenv('CRON_INTERVAL_MINUTES', '10'))  # Frecuencia de ejecución de crons
 SYSTEM_OPERATOR_CODE = os.getenv('SYSTEM_OPERATOR_CODE', 'SYSTEM')  # Código del operador sistema
 
 # Log de configuración cargada (sin información sensible)

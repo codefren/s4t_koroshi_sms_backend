@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, selectinload
 
 from src.adapters.secondary.database.config import (
     SessionLocal,
@@ -102,39 +102,85 @@ class StockReservationCronService:
     
     def _reserve_stock_for_orders(self):
         """
-        Busca órdenes en estados PENDING/ASSIGNED/IN_PICKING y
-        reserva stock para líneas que aún no tienen reserva.
+        Busca órdenes en estados PENDING/ASSIGNED y reserva stock para líneas
+        que aún no tienen reserva completa.
+
+        Optimización: pre-carga assignments y ubicaciones en 3 queries totales
+        en lugar de una query por línea (evita N+1).
         """
-        # Obtener IDs de los estados objetivo
+        # Query 1: estados objetivo
         status_ids = self.db.query(OrderStatus.id).filter(
             OrderStatus.codigo.in_(RESERVATION_STATUS_CODES)
         ).all()
         self.status_id_list = [s[0] for s in status_ids]
-        
+
         if not self.status_id_list:
             logger.warning("  [STOCK-CRON] No se encontraron estados de reserva en BD")
             return
-        
-        # Buscar órdenes con al menos una línea sin reservar
+
+        # Query 2: órdenes + líneas (selectinload = 2 SELECTs planos, sin subqueries gigantes)
         orders = (
             self.db.query(Order)
             .filter(
                 Order.status_id.in_(self.status_id_list),
                 Order.almacen_id == ALMACEN_PICKING_ID,
             )
-            .options(joinedload(Order.order_lines))
+            .options(selectinload(Order.order_lines))
             .all()
         )
-        
+
         if not orders:
             logger.info("  [STOCK-CRON] No hay órdenes pendientes de reserva")
             return
-        
+
         logger.info(f"  [STOCK-CRON] Procesando {len(orders)} órdenes en {RESERVATION_STATUS_CODES}")
-        
+
+        # Recopilar IDs para pre-carga en bulk
+        all_line_ids = [line.id for order in orders for line in order.order_lines]
+        all_product_ids = list({
+            line.product_reference_id
+            for order in orders
+            for line in order.order_lines
+            if line.product_reference_id
+        })
+
+        # Query 3: todos los assignments de todas las líneas de una vez
+        assignments_rows = (
+            self.db.query(OrderLineStockAssignment)
+            .filter(OrderLineStockAssignment.order_line_id.in_(all_line_ids))
+            .all()
+        )
+        # Índice: line_id → suma de cantidad_reservada
+        reserved_by_line: dict[int, int] = {}
+        for a in assignments_rows:
+            reserved_by_line[a.order_line_id] = (
+                reserved_by_line.get(a.order_line_id, 0) + a.cantidad_reservada
+            )
+
+        # Query 4: todas las ubicaciones picking disponibles de todos los productos de una vez
+        available_stock_expr = (
+            ProductLocation.stock_actual - func.coalesce(ProductLocation.stock_reservado, 0)
+        )
+        location_rows = (
+            self.db.query(ProductLocation)
+            .filter(
+                ProductLocation.product_id.in_(all_product_ids),
+                ProductLocation.almacen_id == ALMACEN_PICKING_ID,
+                ProductLocation.activa == True,
+                available_stock_expr > 0,
+            )
+            .order_by(ProductLocation.product_id, available_stock_expr.desc())
+            .all()
+        )
+        # Índice: product_id → lista de ubicaciones ordenadas por stock desc
+        locations_by_product: dict[int, list] = {}
+        for loc in location_rows:
+            locations_by_product.setdefault(loc.product_id, []).append(loc)
+
+        # Procesar cada orden usando los datos ya cargados en memoria
         for order in orders:
             try:
-                self._reserve_order_lines(order)
+                self._reserve_order_lines(order, reserved_by_line, locations_by_product)
                 self.stats["orders_processed"] += 1
             except Exception as e:
                 logger.error(
@@ -142,89 +188,53 @@ class StockReservationCronService:
                     exc_info=True
                 )
                 self.stats["errors"] += 1
-    
-    def _reserve_order_lines(self, order: Order):
+
+    def _reserve_order_lines(
+        self,
+        order: Order,
+        reserved_by_line: dict,
+        locations_by_product: dict,
+    ):
         """
         Reserva stock para cada línea de la orden que no tenga reserva completa.
-        
-        Soporta reserva multi-ubicación: si ninguna ubicación individual tiene
-        suficiente stock pero la suma sí, distribuye la reserva entre varias.
-        Si hay stock parcial, reserva lo disponible y crea reposición por el déficit.
-        
-        Usa la suma de assignments para determinar cuánto ya está reservado,
-        permitiendo completar reservas parciales tras reposiciones.
+
+        Recibe los datos de assignments y ubicaciones ya pre-cargados en memoria
+        para evitar queries adicionales por línea.
         """
         for line in order.order_lines:
             # Saltar líneas sin producto asociado
             if not line.product_reference_id:
                 self.stats["lines_skipped_no_product"] += 1
                 continue
-            
-            # Calcular cuánto ya está reservado via assignments
-            total_already_reserved = sum(
-                a.cantidad_reservada for a in
-                self.db.query(OrderLineStockAssignment)
-                .filter_by(order_line_id=line.id).all()
-            )
-            
+
+            # Cuánto ya está reservado (de la pre-carga en memoria)
+            total_already_reserved = reserved_by_line.get(line.id, 0)
+
             cantidad_needed = line.cantidad_solicitada - total_already_reserved
             if cantidad_needed <= 0:
                 continue  # Ya completamente reservada
-            
-            # Buscar TODAS las ubicaciones picking con stock disponible
-            locations = self._find_available_picking_locations(
-                line.product_reference_id
-            )
-            
+
+            # Ubicaciones disponibles (de la pre-carga en memoria)
+            locations = locations_by_product.get(line.product_reference_id, [])
+
             total_available = sum(
                 (loc.stock_actual or 0) - (loc.stock_reservado or 0)
                 for loc in locations
             )
-            
+
             if total_available > 0:
-                # Reservar lo disponible (parcial o completo)
-                reserved = self._reserve_line_multi(
-                    order, line, locations, cantidad_needed
-                )
-                
+                reserved = self._reserve_line_multi(order, line, locations, cantidad_needed)
+
                 deficit = cantidad_needed - reserved
                 if deficit > 0:
-                    # Parcial → crear reposición por lo que falta
                     self._create_or_upgrade_replenishment_request(
-                        line.product_reference_id,
-                        deficit,
-                        order
+                        line.product_reference_id, deficit, order
                     )
             else:
-                # Nada disponible → reposición por lo que falta
                 self.stats["lines_skipped_no_stock"] += 1
                 self._create_or_upgrade_replenishment_request(
-                    line.product_reference_id,
-                    cantidad_needed,
-                    order
+                    line.product_reference_id, cantidad_needed, order
                 )
-    
-    def _find_available_picking_locations(
-        self, product_id: int
-    ) -> List[ProductLocation]:
-        """
-        Busca TODAS las ubicaciones picking del producto con stock disponible.
-        Ordenadas por stock disponible descendente (mayor primero).
-        """
-        available_stock = (
-            ProductLocation.stock_actual - func.coalesce(ProductLocation.stock_reservado, 0)
-        )
-        return (
-            self.db.query(ProductLocation)
-            .filter(
-                ProductLocation.product_id == product_id,
-                ProductLocation.almacen_id == ALMACEN_PICKING_ID,
-                ProductLocation.activa == True,
-                available_stock > 0,
-            )
-            .order_by(available_stock.desc())
-            .all()
-        )
     
     def _reserve_line_multi(
         self, order: Order, line: OrderLine,
@@ -713,6 +723,8 @@ def start_stock_reservation_scheduler():
         name="Stock Reservation Check",
         max_instances=1,
         replace_existing=True,
+        coalesce=True,           # Si se acumulan disparos perdidos, ejecutar solo una vez
+        misfire_grace_time=60,   # Tolerar hasta 60s de retraso antes de cancelar el disparo
     )
     scheduler.start()
     
