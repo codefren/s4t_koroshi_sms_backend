@@ -706,16 +706,10 @@ def _run_stock_reservation_cron():
         # Lock adquirido: ejecutar el servicio con esta misma sesión
         service = StockReservationCronService(db_session=db)
         service.run()
-
-        # run() hace commit/rollback internamente; aquí solo liberamos el lock
-        db.execute(
-            text(
-                "EXEC sp_releaseapplock "
-                "  @Resource = 'stock_reservation_cron', "
-                "  @LockOwner = 'Session';"
-            )
-        )
-        db.commit()
+        # No llamar sp_releaseapplock explícitamente: después de service.run()
+        # SQLAlchemy puede haber devuelto la conexión al pool (distinto SPID),
+        # lo que causaría error 1223. El lock @LockOwner='Session' se libera
+        # automáticamente cuando db.close() cierra la conexión en el finally.
 
     except Exception as e:
         logger.error(f"❌ [STOCK-CRON] Error en launcher: {e}", exc_info=True)

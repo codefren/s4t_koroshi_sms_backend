@@ -4,7 +4,7 @@ Router para gestión de órdenes.
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func, case
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
@@ -81,7 +81,7 @@ def list_orders(
     query = db.query(Order).options(
         joinedload(Order.status),
         joinedload(Order.operator),
-        joinedload(Order.order_lines)  # Necesario para calcular total_items e items_completados
+        selectinload(Order.order_lines)  # selectinload es más eficiente con limit/offset para colecciones
     )
     
     # Aplicar filtros opcionales
