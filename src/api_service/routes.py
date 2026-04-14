@@ -41,7 +41,7 @@ router = APIRouter()
 
 
 @router.get("/me", response_model=CustomerResponse, tags=["Customer"])
-async def get_current_customer(
+def get_current_customer(
     customer: Customer = Depends(verify_customer_api_key)
 ):
     """
@@ -53,7 +53,7 @@ async def get_current_customer(
 
 
 @router.get("/orders/b2b", response_model=OrdersListResponse, tags=["Orders"])
-async def list_b2b_orders(
+def list_b2b_orders(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Max records to return"),
     viewed: Optional[bool] = Query(None, description="Filter by view status: true=viewed, false=not viewed, null=all"),
@@ -99,7 +99,7 @@ async def list_b2b_orders(
 
 
 @router.get("/orders/b2c", response_model=OrdersListResponse, tags=["Orders"])
-async def list_b2c_orders(
+def list_b2c_orders(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Max records to return"),
     viewed: Optional[bool] = Query(None, description="Filter by view status: true=viewed, false=not viewed, null=all"),
@@ -149,7 +149,7 @@ async def list_b2c_orders(
     response_model=OrderLinesResponse,
     tags=["Orders"]
 )
-async def get_order_lines(
+def get_order_lines(
     order_id: int,
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Max records to return"),
@@ -196,7 +196,7 @@ async def get_order_lines(
     response_model=BatchUpdateOrderResponse,
     tags=["Orders"]
 )
-async def batch_update_order_endpoint(
+def batch_update_order_endpoint(
     request: BatchUpdateOrderRequest,
     customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
@@ -264,7 +264,7 @@ async def batch_update_order_endpoint(
     tags=["Orders"],
     deprecated=True
 )
-async def update_order(
+def update_order(
     request: UpdateOrderRequest,
     customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
@@ -292,7 +292,7 @@ async def update_order(
     response_model=RegisterStockResponse,
     tags=["Stock"]
 )
-async def register_stock_movements(
+def register_stock_movements(
     request: RegisterStockRequest,
     customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
@@ -350,7 +350,7 @@ async def register_stock_movements(
         }
     }
 )
-async def register_box_number_endpoint(
+def register_box_number_endpoint(
     request: RegisterBoxNumberRequest,
     customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
@@ -398,7 +398,7 @@ async def register_box_number_endpoint(
 
 
 @router.get("/packing-pro", response_model=PackingProListResponse, tags=["Packing Pro"])
-async def list_packing_pro(
+def list_packing_pro(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Max records to return"),
     viewed: Optional[bool] = Query(None, description="Filter by view status: true=viewed, false=not viewed, null=all"),
@@ -422,7 +422,7 @@ async def list_packing_pro(
     response_model=PackingProLinesResponse,
     tags=["Packing Pro"]
 )
-async def get_packing_pro_lines_endpoint(
+def get_packing_pro_lines_endpoint(
     company: str,
     packing_id: str,
     skip: int = Query(0, ge=0, description="Number of records to skip"),
@@ -441,7 +441,7 @@ async def get_packing_pro_lines_endpoint(
 
 
 @router.get("/health", tags=["Health"])
-async def health_check():
+def health_check():
     """
     Health check endpoint for B2B API Service.
     """

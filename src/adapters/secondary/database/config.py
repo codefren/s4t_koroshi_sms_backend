@@ -54,8 +54,8 @@ DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
 engine = create_engine(
     DATABASE_URL,
     # connect_args={"check_same_thread": False}  ← solo SQLite, no aplica a MSSQL/pyodbc
-    pool_size=5,               # Conexiones persistentes en el pool
-    max_overflow=10,           # Conexiones extra bajo pico de carga (total máx: 15)
+    pool_size=10,              # Conexiones persistentes en el pool
+    max_overflow=10,           # Conexiones extra bajo pico de carga (total máx: 20)
     pool_timeout=60,           # Segundos esperando una conexión libre antes de error
     pool_recycle=1800,         # Reciclar conexiones cada 30 min (evita cortes del servidor)
     pool_pre_ping=True,        # Verifica que la conexión sigue viva antes de usarla
