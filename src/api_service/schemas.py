@@ -223,3 +223,59 @@ class RegisterBoxNumberResponse(BaseModel):
     status: str = Field(..., description="Success or error")
     message: str = Field(..., description="Descriptive message")
     box_number: str = Field(..., description="Box number registered")
+
+
+# ============================================================================
+# PACKING PRO SCHEMAS
+# ============================================================================
+
+class PackingProListItem(BaseModel):
+    """Minimal packing_pro header info for listing"""
+    id: int
+    company: str
+    packing_id: str
+    pack_qty: int
+    packages: int
+    document: str
+    arrival_date: Optional[str] = None
+    container: str
+    container_type: str
+    status_id: int
+    customer_viewed_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PackingProListResponse(BaseModel):
+    """Paginated response for packing_pro list"""
+    total_count: int
+    skip: int
+    limit: int
+    packings: List[PackingProListItem]
+
+
+class PackingProLineItem(BaseModel):
+    """Single packing_pro line with SKU resolved from product_reference"""
+    id: int
+    line_id: str
+    box_no: int
+    sku: Optional[str] = None
+    quantity: float
+    po_company: Optional[str] = None
+    po_id: Optional[str] = None
+    po_order_id: Optional[str] = None
+    po_line_id: Optional[str] = None
+    pack_id: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PackingProLinesResponse(BaseModel):
+    """Response for packing_pro lines endpoint"""
+    company: str
+    packing_id: str
+    total_count: int
+    skip: int
+    limit: int
+    lines: List[PackingProLineItem]

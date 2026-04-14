@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, Text, DateTime, Date, ForeignKey, JSON, UniqueConstraint, Index, func, select
+from sqlalchemy import Column, Integer, String, Float, Boolean, Text, DateTime, Date, ForeignKey, ForeignKeyConstraint, JSON, UniqueConstraint, Index, func, select
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
 from datetime import datetime, timezone
@@ -810,6 +810,31 @@ class ProductFamily(Base):
         return f"<ProductFamily {self.id} {self.nombre} cap={self.capacidad_ubicacion}>"
 
 
+class ProductSubFamily(Base):
+    """
+    Sub-familias de productos.
+
+    Clasificación más granular que la familia.
+    Ejemplo: Sub-familia=Polos, Sub-familia=Camisas Formales, Sub-familia=Zapatillas Running.
+    """
+    __tablename__ = "product_sub_families"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False, index=True)
+    description = Column(String(250), nullable=True)
+
+    active = Column(Boolean, default=1, nullable=False, index=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    products = relationship("ProductReference", back_populates="sub_family")
+
+    def __repr__(self):
+        return f"<ProductSubFamily {self.id} {self.name}>"
+
+
 class ProductReference(Base):
     """
     Catálogo de referencias de productos del almacén.
@@ -874,19 +899,34 @@ class ProductReference(Base):
     # Familia del producto (determina capacidad por ubicación)
     # NULL = sin familia asignada, usa capacidad por defecto (20)
     familia_id = Column(Integer, ForeignKey("product_families.id", ondelete="SET NULL"), nullable=True, index=True)
-    
+
+    # Sub-familia del producto
+    # NULL = sin sub-familia asignada
+    sub_family_id = Column(Integer, ForeignKey("product_sub_families.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # Género al que va dirigido el producto
+    # Ejemplos: "Hombre", "Mujer", "Unisex", "Niño", "Niña"
+    gender = Column(String(50), nullable=True, index=True)
+
+    # Edad o rango de edad al que va dirigido el producto
+    # Ejemplos: "Adulto", "Niño", "Bebé", "Junior"
+    age = Column(String(50), nullable=True, index=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     # Un producto puede estar en múltiples ubicaciones
     locations = relationship("ProductLocation", back_populates="product")
-    
+
     # Un producto puede tener múltiples códigos EAN
     eans = relationship("EAN", back_populates="product", cascade="all, delete-orphan")
-    
+
     # Familia del producto
     familia = relationship("ProductFamily", back_populates="products")
+
+    # Sub-familia del producto
+    sub_family = relationship("ProductSubFamily", back_populates="products")
 
     __table_args__ = (
         # Índice para búsquedas por color y talla
@@ -1385,6 +1425,76 @@ class StockMovement(Base):
     __table_args__ = (
         Index('idx_stock_mov_tipo_created', 'tipo', 'created_at'),
     )
-    
+
+
+# ============================================================
+# PACKING PRO - Supplier merchandise reception
+# ============================================================
+
+class PackingPro(Base):
+    """
+    Cabecera de recepción de mercancía de proveedor.
+    """
+    __tablename__ = "packing_pro"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, index=True)
+    company = Column(String(4), nullable=False)
+    packing_id = Column(String(10), nullable=False)
+    pack_qty = Column(Integer, nullable=False)
+    packages = Column(Integer, nullable=False)
+    document = Column(String(100), nullable=False)
+    arrival_date = Column(String(10), nullable=True)
+    container = Column(String(40), nullable=False)
+    container_type = Column(String(20), nullable=False)
+    status_id = Column(Integer, nullable=False)
+    customer_viewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    lines = relationship("PackingProLine", back_populates="header", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint('company', 'packing_id', name='uq_packing_pro_company_packing'),
+    )
+
+
+class PackingProLine(Base):
+    """
+    Líneas de detalle de recepción de mercancía de proveedor.
+    """
+    __tablename__ = "packing_pro_line"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, index=True)
+    company = Column(String(4), nullable=False)
+    packing_id = Column(String(10), nullable=False)
+    line_id = Column(String(10), nullable=False)
+    box_no = Column(Integer, nullable=False)
+    product_reference_id = Column(
+        Integer,
+        ForeignKey("product_references.id", ondelete="NO ACTION"),
+        nullable=False,
+        index=True
+    )
+    quantity = Column(Float, nullable=False)
+
+    po_company = Column(String(4), nullable=True)
+    po_id = Column(String(10), nullable=True)
+    po_order_id = Column(String(10), nullable=True)
+    po_line_id = Column(String(10), nullable=True)
+    pack_id = Column(Integer, nullable=True)
+
+    header = relationship("PackingPro", back_populates="lines")
+    product = relationship("ProductReference", backref="packing_pro_lines")
+
+    __table_args__ = (
+        UniqueConstraint('company', 'packing_id', 'line_id', name='uq_packing_pro_line'),
+        ForeignKeyConstraint(
+            ['company', 'packing_id'],
+            ['packing_pro.company', 'packing_pro.packing_id'],
+            ondelete='CASCADE',
+            name='fk_packing_pro_line_header'
+        ),
+    )
+
     def __repr__(self):
         return f"<StockMovement {self.id} {self.tipo} qty={self.cantidad} loc={self.product_location_id}>"

@@ -12,13 +12,15 @@ import os
 import logging
 
 from src.adapters.secondary.database.orm import (
-    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen
+    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen,
+    PackingPro, PackingProLine
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
     OrderListItem, OrderLineSimple, OrderLinesResponse, UpdateOrderResponse,
     OrdersListResponse, OrderLineUpdate, BatchUpdateOrderResponse, RegisterStockRequest, RegisterStockResponse,
-    RegisterBoxNumberRequest, RegisterBoxNumberResponse
+    RegisterBoxNumberRequest, RegisterBoxNumberResponse,
+    PackingProListItem, PackingProListResponse, PackingProLineItem, PackingProLinesResponse
 )
 
 # Logger configuration
@@ -708,7 +710,7 @@ def batch_update_order(
                 "Content-Type": "application/json",
                 "X-API-Key": EXTERNAL_API_KEY
             },
-            timeout=120
+            timeout=None
         )
         
         # 8.6 Log response from external API
@@ -826,7 +828,7 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
                 "Content-Type": "application/json",
                 "X-API-Key": EXTERNAL_API_KEY
             },
-            timeout=120
+            timeout=None
         )
         
         # Step 4: Log response from external API
@@ -971,4 +973,123 @@ def register_box_number(request: RegisterBoxNumberRequest, db: Session) -> Regis
         status="success",
         message=f"Box number '{request.box_number}' registered successfully",
         box_number=new_record.box_number
+    )
+
+
+# ============================================================================
+# PACKING PRO
+# ============================================================================
+
+def get_packing_pro_list(
+    customer: Customer,
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    viewed: Optional[bool] = None
+) -> PackingProListResponse:
+    """
+    Get paginated list of packing_pro headers.
+    Updates customer_viewed_at on first view.
+
+    Args:
+        customer: Authenticated customer
+        db: Database session
+        skip: Pagination offset
+        limit: Max results to return
+        viewed: Filter by view status (True=viewed, False=not viewed, None=all)
+
+    Returns:
+        PackingProListResponse with pagination metadata
+    """
+    base_query = db.query(PackingPro)
+
+    if viewed is not None:
+        if viewed:
+            base_query = base_query.filter(PackingPro.customer_viewed_at.isnot(None))
+        else:
+            base_query = base_query.filter(PackingPro.customer_viewed_at.is_(None))
+
+    total_count = base_query.count()
+    packings = base_query.order_by(PackingPro.created_at.desc()).offset(skip).limit(limit).all()
+
+    # Mark as viewed on first access
+    now = datetime.now(timezone.utc)
+    for packing in packings:
+        if packing.customer_viewed_at is None:
+            packing.customer_viewed_at = now
+    db.commit()
+
+    return PackingProListResponse(
+        total_count=total_count,
+        skip=skip,
+        limit=limit,
+        packings=packings
+    )
+
+
+def get_packing_pro_lines(
+    company: str,
+    packing_id: str,
+    db: Session,
+    skip: int = 0,
+    limit: int = 100
+) -> PackingProLinesResponse:
+    """
+    Get lines for a specific packing_pro identified by (company, packing_id).
+
+    Args:
+        company: Company code
+        packing_id: Packing identifier
+        db: Database session
+        skip: Pagination offset
+        limit: Max results to return
+
+    Returns:
+        PackingProLinesResponse with lines detail
+
+    Raises:
+        HTTPException 404: If packing not found
+    """
+    packing = db.query(PackingPro).filter(
+        PackingPro.company == company,
+        PackingPro.packing_id == packing_id
+    ).first()
+
+    if not packing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Packing '{packing_id}' not found for company '{company}'"
+        )
+
+    base_query = db.query(PackingProLine).filter(
+        PackingProLine.company == company,
+        PackingProLine.packing_id == packing_id
+    )
+
+    total_count = base_query.count()
+    lines = base_query.order_by(PackingProLine.line_id).offset(skip).limit(limit).all()
+
+    lines_out = [
+        PackingProLineItem(
+            id=line.id,
+            line_id=line.line_id,
+            box_no=line.box_no,
+            sku=line.product.sku if line.product else None,
+            quantity=line.quantity,
+            po_company=line.po_company,
+            po_id=line.po_id,
+            po_order_id=line.po_order_id,
+            po_line_id=line.po_line_id,
+            pack_id=line.pack_id
+        )
+        for line in lines
+    ]
+
+    return PackingProLinesResponse(
+        company=company,
+        packing_id=packing_id,
+        total_count=total_count,
+        skip=skip,
+        limit=limit,
+        lines=lines_out
     )
