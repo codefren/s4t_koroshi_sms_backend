@@ -1,4 +1,5 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sentry_sdk
 from src.adapters.secondary.database.config import engine, Base
+
+logger = logging.getLogger(__name__)
 
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN", ""),
@@ -33,6 +36,17 @@ from src.services.stock_reservation_cron_service import start_stock_reservation_
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
+
+    # Verificar conexión a la base de datos antes de arrancar
+    try:
+        with engine.connect() as conn:
+            conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+        logger.info("✅ Conexión a la base de datos verificada correctamente")
+    except Exception as e:
+        logger.critical(f"❌ No se pudo conectar a la base de datos: {e}")
+        logger.critical("   Revisa DB_SERVER, DB_NAME, DB_USER, DB_PASSWORD en el archivo .env")
+        raise RuntimeError(f"Database connection failed: {e}") from e
+
     stock_scheduler = start_stock_reservation_scheduler()
     yield
     stock_scheduler.shutdown()

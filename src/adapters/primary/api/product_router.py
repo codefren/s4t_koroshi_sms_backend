@@ -12,7 +12,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 import math
 
-from src.adapters.secondary.database.config import SessionLocal, ALMACEN_PICKING_ID, ALMACEN_REPOSICION_ID, get_db
+from src.adapters.secondary.database.config import ALMACEN_PICKING_ID, ALMACEN_REPOSICION_ID, get_db
 from src.adapters.secondary.database.orm import ProductReference, ProductLocation, EAN, StockMovement, OrderLine, Order, OrderStatus, ReplenishmentRequest
 from src.core.domain.models import ProductLocationCreate, ProductLocationResponse
 from src.core.domain.product_api_models import (
@@ -38,15 +38,6 @@ router = APIRouter(prefix="/products", tags=["products"])
 # ============================================================================
 # DEPENDENCY INJECTION
 # ============================================================================
-
-def get_db():
-    """Dependency para obtener sesión de base de datos."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 
 # ============================================================================
 # UTILIDADES
