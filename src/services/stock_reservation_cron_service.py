@@ -669,16 +669,22 @@ def _run_stock_reservation_cron():
 
     db = SessionLocal()
     try:
-        # Intentar adquirir un lock exclusivo de aplicación en SQL Server.
-        # sp_getapplock devuelve 0 (éxito) o -1/-2/-3 (timeout/cancelado/error).
-        result = db.execute(
+        # sp_getapplock usa RETURN value (no result set), hay que capturarlo con DECLARE.
+        # Devuelve 0 = lock adquirido, -1/-2/-3 = timeout/cancelado/error (otro worker activo).
+        row = db.execute(
             text(
-                "EXEC sp_getapplock @Resource = 'stock_reservation_cron', "
-                "@LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 0"
+                "DECLARE @ret INT; "
+                "EXEC @ret = sp_getapplock "
+                "  @Resource = 'stock_reservation_cron', "
+                "  @LockMode = 'Exclusive', "
+                "  @LockOwner = 'Session', "
+                "  @LockTimeout = 0; "
+                "SELECT @ret AS lock_result;"
             )
-        ).scalar()
+        ).fetchone()
 
-        if result is not None and result < 0:
+        lock_result = row[0] if row is not None else -1
+        if lock_result < 0:
             logger.info("⏭️  [STOCK-CRON] Otro worker ya está ejecutando el cron — saltando")
             return
 
@@ -689,8 +695,9 @@ def _run_stock_reservation_cron():
         # run() hace commit/rollback internamente; aquí solo liberamos el lock
         db.execute(
             text(
-                "EXEC sp_releaseapplock @Resource = 'stock_reservation_cron', "
-                "@LockOwner = 'Session'"
+                "EXEC sp_releaseapplock "
+                "  @Resource = 'stock_reservation_cron', "
+                "  @LockOwner = 'Session';"
             )
         )
         db.commit()
