@@ -53,13 +53,14 @@ DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
 # Configurar engine con pool adecuado
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    pool_size=10,              # Número de conexiones persistentes
-    max_overflow=20,           # Conexiones adicionales si se necesitan
-    pool_timeout=30,           # Timeout para obtener conexión del pool
-    pool_recycle=3600,         # Reciclar conexiones cada hora
-    pool_pre_ping=True,        # Verificar conexión antes de usarla
-    echo=False                 # No mostrar SQL en logs (cambiar a True para debug)
+    # connect_args={"check_same_thread": False}  ← solo SQLite, no aplica a MSSQL/pyodbc
+    pool_size=5,               # Conexiones persistentes en el pool
+    max_overflow=10,           # Conexiones extra bajo pico de carga (total máx: 15)
+    pool_timeout=60,           # Segundos esperando una conexión libre antes de error
+    pool_recycle=1800,         # Reciclar conexiones cada 30 min (evita cortes del servidor)
+    pool_pre_ping=True,        # Verifica que la conexión sigue viva antes de usarla
+    pool_use_lifo=True,        # Reusar conexiones recientes primero (mantiene pocas abiertas)
+    echo=False
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

@@ -135,19 +135,34 @@ class StockReservationCronService:
 
         logger.info(f"  [STOCK-CRON] Procesando {len(orders)} órdenes en {RESERVATION_STATUS_CODES}")
 
-        # Recopilar IDs para pre-carga en bulk
-        all_line_ids = [line.id for order in orders for line in order.order_lines]
-        all_product_ids = list({
-            line.product_reference_id
-            for order in orders
-            for line in order.order_lines
-            if line.product_reference_id
-        })
+        # Subquery de líneas activas — evita pasar miles de IDs como parámetros (límite pyodbc ~2100)
+        active_lines_sq = (
+            self.db.query(OrderLine.id)
+            .join(Order, OrderLine.order_id == Order.id)
+            .filter(
+                Order.status_id.in_(self.status_id_list),
+                Order.almacen_id == ALMACEN_PICKING_ID,
+            )
+            .subquery()
+        )
 
-        # Query 3: todos los assignments de todas las líneas de una vez
+        # Subquery de productos activos
+        active_products_sq = (
+            self.db.query(OrderLine.product_reference_id)
+            .join(Order, OrderLine.order_id == Order.id)
+            .filter(
+                Order.status_id.in_(self.status_id_list),
+                Order.almacen_id == ALMACEN_PICKING_ID,
+                OrderLine.product_reference_id.isnot(None),
+            )
+            .distinct()
+            .subquery()
+        )
+
+        # Query 3: assignments via subquery (sin IN con miles de parámetros)
         assignments_rows = (
             self.db.query(OrderLineStockAssignment)
-            .filter(OrderLineStockAssignment.order_line_id.in_(all_line_ids))
+            .filter(OrderLineStockAssignment.order_line_id.in_(active_lines_sq))
             .all()
         )
         # Índice: line_id → suma de cantidad_reservada
@@ -157,14 +172,14 @@ class StockReservationCronService:
                 reserved_by_line.get(a.order_line_id, 0) + a.cantidad_reservada
             )
 
-        # Query 4: todas las ubicaciones picking disponibles de todos los productos de una vez
+        # Query 4: ubicaciones picking disponibles via subquery
         available_stock_expr = (
             ProductLocation.stock_actual - func.coalesce(ProductLocation.stock_reservado, 0)
         )
         location_rows = (
             self.db.query(ProductLocation)
             .filter(
-                ProductLocation.product_id.in_(all_product_ids),
+                ProductLocation.product_id.in_(active_products_sq),
                 ProductLocation.almacen_id == ALMACEN_PICKING_ID,
                 ProductLocation.activa == True,
                 available_stock_expr > 0,
