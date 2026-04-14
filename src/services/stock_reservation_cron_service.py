@@ -48,18 +48,18 @@ RESERVATION_STATUS_CODES = ["PENDING", "ASSIGNED"]
 class StockReservationCronService:
     """
     Servicio cron para reserva automática de stock en órdenes.
-    
+
     Responsabilidades:
         - Buscar órdenes en PENDING/ASSIGNED con líneas sin reserva
         - Asignar product_location_id de picking a cada línea
         - Incrementar stock_reservado en la ubicación
         - Crear registros de auditoría (StockMovement)
     """
-    
+
     def __init__(self, db_session: Optional[Session] = None):
-        self.db = db_session or SessionLocal()
-        self.owns_session = db_session is None
-        
+        # db_session se acepta para tests; en producción se crea en run()
+        self._external_session = db_session
+
         # Estadísticas de ejecución
         self.stats = {
             "lines_reserved": 0,
@@ -72,26 +72,31 @@ class StockReservationCronService:
             "start_time": None,
             "end_time": None,
         }
-    
+
     def run(self):
         """
         Ejecuta el ciclo completo de reserva de stock.
+        La sesión se abre y cierra aquí para garantizar que siempre se libere.
         """
         self.stats["start_time"] = datetime.utcnow()
         logger.info("📦 [STOCK-CRON] Iniciando ciclo de reserva de stock")
-        
+
+        # Usar sesión externa (tests) o crear una nueva y cerrarla aquí
+        self.db = self._external_session or SessionLocal()
+        owns_session = self._external_session is None
+
         try:
             self._reserve_stock_for_orders()
             self.db.commit()
-            
+
         except Exception as e:
             logger.error(f"❌ [STOCK-CRON] Error fatal: {e}", exc_info=True)
             self.db.rollback()
             self.stats["errors"] += 1
         finally:
-            if self.owns_session:
+            if owns_session:
                 self.db.close()
-        
+
         self._log_stats()
         return self.stats
     
@@ -645,10 +650,49 @@ def release_stock_for_order(order: Order, db: Session) -> List[Dict]:
 def _run_stock_reservation_cron():
     """
     Función ejecutada por APScheduler en cada intervalo.
-    Crea instancia fresca del servicio con su propia sesión de BD.
+
+    Usa un bloqueo en BD para evitar ejecuciones paralelas cuando la app
+    corre con múltiples workers de uvicorn (cada worker tiene su propio
+    scheduler, pero solo uno debe ejecutar el cron a la vez).
     """
-    service = StockReservationCronService()
-    service.run()
+    from sqlalchemy import text
+
+    db = SessionLocal()
+    try:
+        # Intentar adquirir un lock exclusivo de aplicación en SQL Server.
+        # sp_getapplock devuelve 0 (éxito) o -1/-2/-3 (timeout/cancelado/error).
+        result = db.execute(
+            text(
+                "EXEC sp_getapplock @Resource = 'stock_reservation_cron', "
+                "@LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 0"
+            )
+        ).scalar()
+
+        if result is not None and result < 0:
+            logger.info("⏭️  [STOCK-CRON] Otro worker ya está ejecutando el cron — saltando")
+            return
+
+        # Lock adquirido: ejecutar el servicio con esta misma sesión
+        service = StockReservationCronService(db_session=db)
+        service.run()
+
+        # run() hace commit/rollback internamente; aquí solo liberamos el lock
+        db.execute(
+            text(
+                "EXEC sp_releaseapplock @Resource = 'stock_reservation_cron', "
+                "@LockOwner = 'Session'"
+            )
+        )
+        db.commit()
+
+    except Exception as e:
+        logger.error(f"❌ [STOCK-CRON] Error en launcher: {e}", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 
 def start_stock_reservation_scheduler():
