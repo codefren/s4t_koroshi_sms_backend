@@ -770,6 +770,150 @@ def batch_update_order(
 
 
 
+def batch_update_picked_order(
+    order_number: str,
+    lines_updates: List[OrderLineUpdate],
+    customer: Customer,
+    db: Session
+) -> BatchUpdateOrderResponse:
+    """
+    Register a PICKED order against the external Packing API.
+
+    Does NOT modify any order lines. Only:
+    1. Validates order is in PICKED status
+    2. Sends lines to external Packing API
+    3. If external API returns success → marks order as READY + sets fecha_fin_picking
+    4. If external API fails → rolls back and returns error (no DB changes)
+
+    Raises:
+        HTTPException 404: Order not found
+        HTTPException 400: Order is not in PICKED status or already completed
+    """
+    # 1. Find order
+    order = db.query(Order).filter(Order.numero_orden == order_number).first()
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order {order_number} not found")
+
+    # 2. Validate PICKED status
+    order_status = db.query(OrderStatus).filter(OrderStatus.id == order.status_id).first()
+    current_status = order_status.codigo if order_status else "unknown"
+
+    if current_status != 'PICKED':
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order {order_number} must be in PICKED status. Current status: {current_status}"
+        )
+
+    # 3. Verify warehouse access
+    if order.almacen_id:
+        verify_warehouse_access(customer, order.almacen_id, db)
+
+    # 5. Build external API payload from incoming lines
+    external_lines = []
+    for line in lines_updates:
+        if line.quantity_served > 0:
+            external_lines.append({
+                "sku": line.sku,
+                "matricula": line.box_code or "",
+                "cantidad": line.quantity_served
+            })
+
+    external_payload = {
+        "empresaId": "0001",
+        "almacenId": order.almacen.codigo if order.almacen else "00000001",
+        "clienteId": order.cliente,
+        "ordenServicioId": order.numero_orden,
+        "pedidoId": order.numero_pedido,
+        "pedidoEmpresa": "0001",
+        "operarioId": "000001",
+        "generarTraspaso": True,
+        "tipoOperacionStockTraspaso": 5,
+        "lineas": external_lines
+    }
+
+    # 6. Send to external Packing API
+    try:
+        logger.info(f"Sending PICKED order {order_number} to external Packing API")
+        logger.info(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
+
+        response = requests.post(
+            "http://localhost:5053/api/Packing",
+            json=external_payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-API-Key": EXTERNAL_API_KEY
+            },
+            timeout=None
+        )
+
+        logger.info(f"External API response - Status: {response.status_code}, Body: {response.text}")
+
+        try:
+            external_api_response = response.json()
+        except json.JSONDecodeError:
+            external_api_response = {"raw_response": response.text}
+
+        # 7. Check success
+        api_success = (
+            response.status_code == 201
+            and isinstance(external_api_response, dict)
+            and external_api_response.get('success', False)
+        )
+
+        if not api_success:
+            error_message = "Unknown error from external API"
+            if isinstance(external_api_response, dict):
+                error_message = external_api_response.get('error', external_api_response.get('message', str(external_api_response)))
+
+            logger.error(f"External API failed for order {order_number}: {error_message}")
+            return BatchUpdateOrderResponse(
+                status="error",
+                message=f"External API error: {error_message}",
+                order_number=order_number,
+                order_status=current_status,
+                lines_updated=0,
+                lines_completed=0,
+                lines_partial=0,
+                lines_pending=len(lines_updates),
+                external_api_data=external_api_response
+            )
+
+        # 8. External API succeeded → update order status only
+        ready_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'READY').first()
+        if ready_status:
+            order.status_id = ready_status.id
+
+        db.commit()
+        logger.info(f"Order {order_number} marked as READY after successful external API response")
+
+        return BatchUpdateOrderResponse(
+            status="success",
+            message=f"Order {order_number} registered successfully and marked as READY",
+            order_number=order_number,
+            order_status="READY",
+            lines_updated=len(lines_updates),
+            lines_completed=len([l for l in lines_updates if l.quantity_served > 0]),
+            lines_partial=0,
+            lines_pending=len([l for l in lines_updates if l.quantity_served == 0]),
+            external_api_data=external_api_response
+        )
+
+    except requests.exceptions.RequestException as e:
+        error_msg = f"Error connecting to external Packing API: {str(e)}"
+        logger.error(error_msg)
+        return BatchUpdateOrderResponse(
+            status="error",
+            message=error_msg,
+            order_number=order_number,
+            order_status=current_status,
+            lines_updated=0,
+            lines_completed=0,
+            lines_partial=0,
+            lines_pending=len(lines_updates),
+            external_api_data=None
+        )
+
+
 def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockResponse:
     """
     Register stock movements between locations.

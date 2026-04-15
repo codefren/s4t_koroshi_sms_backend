@@ -124,6 +124,22 @@ class BatchUpdateOrderRequest(BaseModel):
     lines: List[OrderLineUpdate] = Field(..., description="List of all order lines to update")
 
 
+class PickedBatchUpdateRequest(BaseModel):
+    """Request body for updating a PICKED order — order_number comes from the URL path"""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "lines": [
+                    {"sku": "SHOE-BLK-42-001", "quantity_served": 10, "box_code": "BOX-001"},
+                    {"sku": "SHOE-RED-38-002", "quantity_served": 0}
+                ]
+            }
+        }
+    )
+
+    lines: List[OrderLineUpdate] = Field(..., description="List of all order lines to update")
+
+
 class BatchUpdateOrderResponse(BaseModel):
     """Response after batch update"""
     status: str

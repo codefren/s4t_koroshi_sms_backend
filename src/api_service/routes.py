@@ -17,6 +17,7 @@ from src.api_service.schemas import (
     CustomerResponse,
     BatchUpdateOrderRequest,
     BatchUpdateOrderResponse,
+    PickedBatchUpdateRequest,
     RegisterStockRequest,
     RegisterStockResponse,
     RegisterBoxNumberRequest,
@@ -30,6 +31,7 @@ from src.api_service.service import (
     get_order_lines_for_customer,
     update_order_quantity,
     batch_update_order,
+    batch_update_picked_order,
     register_stock,
     register_box_number,
     get_packing_pro_list,
@@ -252,6 +254,44 @@ def batch_update_order_endpoint(
     """
     return batch_update_order(
         order_number=request.order_number,
+        lines_updates=request.lines,
+        customer=customer,
+        db=db
+    )
+
+
+@router.put(
+    "/orders/{order_number}/batch-update",
+    response_model=BatchUpdateOrderResponse,
+    tags=["Orders"]
+)
+def batch_update_picked_order_endpoint(
+    order_number: str,
+    request: PickedBatchUpdateRequest,
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    Update ALL lines of an order that is in **PICKED** status.
+
+    The order must be in PICKED status (picking completed by operator).
+    This endpoint blocks updates on orders in any other status.
+
+    **Example:**
+    ```
+    curl -X PUT -H "X-Api-Key: cust_live_abc123..." \\
+         -H "Content-Type: application/json" \\
+         -d '{
+           "lines": [
+             {"sku": "SHOE-BLK-42-001", "quantity_served": 10, "box_code": "BOX-001"},
+             {"sku": "SHOE-RED-38-002", "quantity_served": 0}
+           ]
+         }' \\
+         http://localhost:8000/api/service/orders/ORD-12345/batch-update
+    ```
+    """
+    return batch_update_picked_order(
+        order_number=order_number,
         lines_updates=request.lines,
         customer=customer,
         db=db
