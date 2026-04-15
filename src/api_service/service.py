@@ -773,7 +773,6 @@ def batch_update_order(
 def batch_update_picked_order(
     order_number: str,
     lines_updates: List[OrderLineUpdate],
-    customer: Customer,
     db: Session
 ) -> BatchUpdateOrderResponse:
     """
@@ -804,9 +803,9 @@ def batch_update_picked_order(
             detail=f"Order {order_number} must be in PICKED status. Current status: {current_status}"
         )
 
-    # 3. Verify warehouse access
-    if order.almacen_id:
-        verify_warehouse_access(customer, order.almacen_id, db)
+    # # 3. Verify warehouse access
+    # if order.almacen_id:
+    #     verify_warehouse_access(customer, order.almacen_id, db)
 
     # 5. Build external API payload from incoming lines
     external_lines = []
