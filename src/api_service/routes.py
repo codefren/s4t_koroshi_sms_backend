@@ -268,7 +268,7 @@ def batch_update_order_endpoint(
 def batch_update_picked_order_endpoint(
     order_number: str,
     request: PickedBatchUpdateRequest,
-    customer: Customer = Depends(verify_customer_api_key),
+    # customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
 ):
     """
