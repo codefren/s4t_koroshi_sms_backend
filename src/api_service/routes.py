@@ -293,7 +293,7 @@ def batch_update_picked_order_endpoint(
     return batch_update_picked_order(
         order_number=order_number,
         lines_updates=request.lines,
-        customer=customer,
+        # customer=customer,
         db=db
     )
 
