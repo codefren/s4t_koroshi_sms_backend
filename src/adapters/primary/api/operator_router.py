@@ -34,12 +34,19 @@ def _order_line_location_sort_key(item: dict) -> tuple:
     Orden:
     1. Pasillos numéricos (1, 2, 3 ... N) antes que alfabéticos (A, B ... Z)
     2. Dentro de cada grupo, orden ascendente de pasillo
-    3. Dentro de cada pasillo, orden ascendente por ubicación
+    3. Dentro de cada pasillo, patrón serpentina:
+       - Pasillos pares  → ubicaciones de menor a mayor (ascendente)
+       - Pasillos impares → ubicaciones de mayor a menor (descendente)
        - Para rangos como "013/015" se usa el primer número (13)
+    4. Sin ubicación → al final
     """
     loc = item.get("ubicacion") or {}
     pasillo = (loc.get("pasillo") or "").strip()
     ubicacion_str = (loc.get("ubicacion") or "").strip()
+
+    # Sin pasillo ni ubicación → grupo 2 (al final)
+    if not pasillo:
+        return (2, 0, "", 0)
 
     # Pasillos numéricos van primero (grupo 0), luego los alfabéticos (grupo 1)
     try:
@@ -56,9 +63,17 @@ def _order_line_location_sort_key(item: dict) -> tuple:
     try:
         ubicacion_num = int(ubicacion_base)
     except (ValueError, TypeError):
-        ubicacion_num = float("inf")
+        ubicacion_num = 0
 
-    return (pasillo_group, pasillo_num, pasillo_alpha, ubicacion_num)
+    # Patrón serpentina en pasillos numéricos:
+    # - pares → ascendente (ubicacion_num normal)
+    # - impares → descendente (negamos ubicacion_num)
+    if pasillo_group == 0:
+        ubicacion_sort = ubicacion_num if pasillo_num % 2 == 0 else -ubicacion_num
+    else:
+        ubicacion_sort = ubicacion_num
+
+    return (pasillo_group, pasillo_num, pasillo_alpha, ubicacion_sort)
 
 
 @router.get("/", response_model=List[OperatorResponse])
