@@ -342,7 +342,21 @@ def get_order_detail(
             asignaciones=asignaciones,
         )
         productos.append(producto)
-    
+
+    def _producto_pasillo_sort_key(p: OrderProductDetail) -> tuple:
+        detail = p.ubicacion_detalle
+        if not detail and p.asignaciones:
+            detail = p.asignaciones[0].ubicacion
+        if not detail or not detail.pasillo:
+            return (2, 0, "", 0)
+        pasillo = detail.pasillo.strip()
+        try:
+            return (0, int(pasillo), "", 0)
+        except (ValueError, TypeError):
+            return (1, 0, pasillo.upper(), 0)
+
+    productos.sort(key=_producto_pasillo_sort_key)
+
     # Calcular progreso
     progreso = 0.0
     if order.total_items > 0:
