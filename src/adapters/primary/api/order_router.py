@@ -752,9 +752,15 @@ def optimize_picking_route(
     
     picking_route = []
     secuencia = 1
-    
-    for pasillo in sorted(stops_by_aisle.keys(), key=lambda p: (int(p) if p and p.isdigit() else float('inf'), p or '')):
-        for stop in stops_by_aisle[pasillo]:
+
+    def _aisle_sort_key(p: str):
+        # Numeric aisles first (1,2,3...), then alphabetic (A,B,C...)
+        p = p or ""
+        return (0, int(p), "") if p.isdigit() else (1, 0, p.upper())
+
+    for pasillo in sorted(stops_by_aisle.keys(), key=_aisle_sort_key):
+        # Within each aisle: ascending by ubicacion
+        for stop in sorted(stops_by_aisle[pasillo], key=lambda s: s.get("ubicacion") or ""):
             stop["secuencia"] = secuencia
             picking_route.append(stop)
             secuencia += 1

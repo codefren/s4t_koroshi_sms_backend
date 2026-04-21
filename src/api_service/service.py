@@ -11,6 +11,9 @@ import json
 import os
 import logging
 
+from src.api_service.xpo_service import XpoExpedicionParams, send_xpo_expedicion
+from src.api_service.erp_service import get_packing_info
+
 from src.adapters.secondary.database.orm import (
     Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen,
     PackingPro, PackingProLine
@@ -884,6 +887,40 @@ def batch_update_picked_order(
 
         db.commit()
         logger.info(f"Order {order_number} marked as READY after successful external API response")
+
+        # 9. Send expedition to XPO
+        fecha_now = datetime.now()
+        total_cajas    = len([l for l in lines_updates if l.box_code])
+        total_unidades = sum(l.quantity_served for l in lines_updates if l.quantity_served > 0)
+
+        # Fetch destination data from ERP (falls back to order fields if unavailable)
+        erp = get_packing_info(order.numero_orden)
+
+        xpo_params = XpoExpedicionParams(
+            dest_nombre    = (erp.nombre    if erp else None) or order.nombre_cliente or "",
+            dest_direccion = (erp.direccion if erp else None) or "",
+            dest_cp        = (erp.cp        if erp else None) or "",
+            dest_localidad = (erp.poblacion if erp else None) or "",
+            dest_provincia = (erp.provincia if erp else None) or "",
+            dest_pais      = (erp.pais      if erp else None) or "ES",
+            dest_movil     = (erp.telefono  if erp else None) or "",
+            dest_email     = (erp.email     if erp else None) or "",
+            dest_cod_tienda= (erp.cod_tienda if erp else None) or "",
+            obs_linea1        = f"{order.nombre_cliente or ''} / PACKING / {order.numero_orden}",
+            referencia        = f"{order.numero_pedido or ''} - {fecha_now.strftime('%Y%m%d')}",
+            fecha_expedicion  = fecha_now,
+            total_cajas    = total_cajas if total_cajas > 0 else 1,
+            tipo_caja      = "5",
+            total_unidades = total_unidades,
+            nro_pedido_ventas = order.numero_pedido or "",
+            nro_su_pedido     = (erp.ped_cli if erp else None) or "",
+        )
+
+        xpo_result = send_xpo_expedicion(xpo_params)
+        if xpo_result["success"]:
+            logger.info(f"XPO expedition registered — consignment_id: {xpo_result.get('consignment_id')}")
+        else:
+            logger.error(f"XPO expedition failed: {xpo_result.get('error')} — raw: {xpo_result.get('raw_response')}")
 
         return BatchUpdateOrderResponse(
             status="success",
