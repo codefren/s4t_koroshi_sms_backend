@@ -224,3 +224,44 @@ class RegisterBoxNumberResponse(BaseModel):
     status: str = Field(..., description="Success or error")
     message: str = Field(..., description="Descriptive message")
     box_number: str = Field(..., description="Box number registered")
+
+
+# ============================================================================
+# MATRICULA VERIFICATION SCHEMAS
+# ============================================================================
+
+class MatriculaLine(BaseModel):
+    sku: str
+    cantidad: int
+
+
+class MatriculaVerifyRequest(BaseModel):
+    matricula: str
+    lineas: List[MatriculaLine]
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "matricula": "CJ00000001",
+                "lineas": [
+                    {"sku": "2611TS01-000003-M", "cantidad": 3},
+                    {"sku": "2611TS02-000003-M", "cantidad": 3}
+                ]
+            }
+        }
+    )
+
+
+class MatriculaLineResult(BaseModel):
+    sku: str
+    cantidadRecibida: int
+    cantidadEsperada: int
+    diferencia: int
+    estado: str
+
+
+class MatriculaVerifyResponse(BaseModel):
+    matricula: str
+    resultado: str
+    procesadaEn: datetime
+    lineas: List[MatriculaLineResult]

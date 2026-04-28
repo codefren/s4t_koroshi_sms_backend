@@ -20,7 +20,9 @@ from src.api_service.schemas import (
     RegisterStockRequest,
     RegisterStockResponse,
     RegisterBoxNumberRequest,
-    RegisterBoxNumberResponse
+    RegisterBoxNumberResponse,
+    MatriculaVerifyRequest,
+    MatriculaVerifyResponse
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
@@ -29,7 +31,8 @@ from src.api_service.service import (
     update_order_quantity,
     batch_update_order,
     register_stock,
-    register_box_number
+    register_box_number,
+    verify_matricula
 )
 
 
@@ -391,6 +394,38 @@ async def register_box_number_endpoint(
     **Authentication:** Required - Customer API Key in X-API-Key header.
     """
     return register_box_number(request=request, db=db)
+
+
+@router.post(
+    "/matriculas/verify",
+    response_model=MatriculaVerifyResponse,
+    tags=["Matriculas"],
+    responses={
+        400: {"description": "Box already validated previously"},
+        404: {"description": "Box not found"},
+        502: {"description": "External API error or unexpected response"},
+    }
+)
+async def verify_matricula_endpoint(
+    request: MatriculaVerifyRequest,
+    customer: Customer = Depends(verify_customer_api_key)
+):
+    """
+    Verify a matricula against the external system.
+
+    Groups duplicate SKUs by accumulating their quantities before forwarding
+    to the external API. Returns per-line comparison between received and
+    expected quantities.
+
+    **Authentication:** Requires X-Api-Key header
+
+    **Response codes from external API:**
+    - `200` — Verification result returned
+    - `400` — Box already validated previously
+    - `404` — Box not found
+    - `502` — Unexpected or unreachable external API
+    """
+    return verify_matricula(request)
 
 
 @router.get("/health", tags=["Health"])

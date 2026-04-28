@@ -18,7 +18,8 @@ from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
     OrderListItem, OrderLineSimple, OrderLinesResponse, UpdateOrderResponse,
     OrdersListResponse, OrderLineUpdate, BatchUpdateOrderResponse, RegisterStockRequest, RegisterStockResponse,
-    RegisterBoxNumberRequest, RegisterBoxNumberResponse
+    RegisterBoxNumberRequest, RegisterBoxNumberResponse,
+    MatriculaVerifyRequest, MatriculaVerifyResponse
 )
 
 # Logger configuration
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # External API configuration
 EXTERNAL_API_KEY = os.getenv('EXTERNAL_API_KEY', 'T3sT3')
+MATRICULA_API_URL = os.getenv('MATRICULA_API_URL', 'http://localhost:5053/api/Matriculas/verify')
 
 
 def get_customer_b2b_orders(
@@ -946,6 +948,75 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
         error_msg = f"Error al registrar stock: {str(e)}"
         logger.error(f"Error: {error_msg}")
         raise HTTPException(status_code=400, detail=error_msg)
+
+
+def verify_matricula(request: MatriculaVerifyRequest) -> MatriculaVerifyResponse:
+    """
+    Verify a matricula by sending received quantities to external API.
+
+    Groups duplicate SKUs by accumulating their quantities before sending.
+    Maps external API response codes to proper HTTP exceptions.
+
+    Args:
+        request: MatriculaVerifyRequest with matricula and scanned lines
+
+    Returns:
+        MatriculaVerifyResponse with per-line comparison results
+
+    Raises:
+        HTTPException 400: Box already validated previously
+        HTTPException 404: Box not found
+        HTTPException 502: Unexpected or unreachable external API
+    """
+    # Step 1: Group quantities by SKU
+    sku_quantities: dict[str, int] = {}
+    for line in request.lineas:
+        sku_quantities[line.sku] = sku_quantities.get(line.sku, 0) + line.cantidad
+
+    grouped_lines = [{"sku": sku, "cantidad": qty} for sku, qty in sku_quantities.items()]
+
+    payload = {
+        "matricula": request.matricula,
+        "lineas": grouped_lines
+    }
+
+    logger.info(f"Sending matricula verify request: matricula={request.matricula}, lines={len(grouped_lines)}")
+
+    try:
+        response = requests.post(
+            MATRICULA_API_URL,
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-API-Key": EXTERNAL_API_KEY
+            },
+            timeout=30
+        )
+
+        logger.info(f"External API response - Status: {response.status_code}")
+
+        if response.status_code == 200:
+            return MatriculaVerifyResponse(**response.json())
+
+        if response.status_code == 400:
+            raise HTTPException(status_code=400, detail="Box already validated previously")
+
+        if response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Box not found")
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unexpected response from external API: {response.status_code}"
+        )
+
+    except HTTPException:
+        raise
+    except requests.exceptions.RequestException as e:
+        logger.error(f"External API connection error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"External API error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in verify_matricula: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"External API error: {str(e)}")
 
 
 def register_box_number(request: RegisterBoxNumberRequest, db: Session) -> RegisterBoxNumberResponse:
