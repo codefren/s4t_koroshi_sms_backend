@@ -548,19 +548,39 @@ def _check_release_location(db: Session, location: ProductLocation, order: Order
             ReplenishmentRequest.location_destino_id == location.id,
             ReplenishmentRequest.status.in_(["READY", "IN_PROGRESS"]),
         ).first()
-        
+
         if not pending_replenishment:
             old_product_id = location.product_id
             old_code = location.codigo_ubicacion
-            location.product_id = None
-            location.stock_minimo = 0
-            location.ultima_actualizacion_stock = datetime.utcnow()
-            
-            logger.info(
-                f"  [RELEASE] Ubicación {old_code} liberada "
-                f"(producto anterior: {old_product_id}, "
-                f"orden: {order.numero_orden})"
-            )
+
+            # No liberar si hay otros productos activos en la misma coordenada física.
+            # Una ubicación puede tener múltiples productos; el slot no queda "libre"
+            # solo porque uno de ellos se agotó.
+            other_products_same_slot = db.query(ProductLocation).filter(
+                ProductLocation.almacen_id == location.almacen_id,
+                ProductLocation.pasillo == location.pasillo,
+                ProductLocation.lado == location.lado,
+                ProductLocation.ubicacion == location.ubicacion,
+                ProductLocation.altura == location.altura,
+                ProductLocation.product_id.isnot(None),
+                ProductLocation.id != location.id,
+            ).first()
+
+            if other_products_same_slot:
+                logger.info(
+                    f"  [RELEASE SKIP] Ubicación {old_code} no liberada: "
+                    f"hay otros productos en la misma coordenada física "
+                    f"(producto agotado: {old_product_id}, orden: {order.numero_orden})"
+                )
+            else:
+                location.product_id = None
+                location.stock_minimo = 0
+                location.ultima_actualizacion_stock = datetime.utcnow()
+                logger.info(
+                    f"  [RELEASE] Ubicación {old_code} liberada "
+                    f"(producto anterior: {old_product_id}, "
+                    f"orden: {order.numero_orden})"
+                )
 
 
 def release_stock_for_order(order: Order, db: Session) -> List[Dict]:
