@@ -203,8 +203,8 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
 
       <!-- Referencia pedido (variable) -->
       <tns:ReferenciaPedido>
-        <tns:NroPedidoVentas></tns:NroPedidoVentas>
-        <tns:NroSuPedido></tns:NroSuPedido>
+        <tns:NroPedidoVentas>{e(params.nro_pedido_ventas)}</tns:NroPedidoVentas>
+        <tns:NroSuPedido>{e(params.nro_su_pedido)}</tns:NroSuPedido>
       </tns:ReferenciaPedido>
 
     </tns:RegistraExpedicion>
