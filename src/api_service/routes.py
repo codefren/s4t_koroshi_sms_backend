@@ -2,7 +2,6 @@
 FastAPI routes for B2B Customer API Service.
 """
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
@@ -281,18 +280,6 @@ def batch_update_picked_order_endpoint(
         lines_updates=request.lines,
         db=db
     )
-
-    pdf_relative = (result.external_api_data or {}).get("pdf_path")
-    if pdf_relative:
-        media_root = os.path.join(os.path.dirname(__file__), "..", "..", "media")
-        full_path  = os.path.join(media_root, pdf_relative)
-        if os.path.exists(full_path):
-            return FileResponse(
-                path=full_path,
-                media_type="application/pdf",
-                filename=f"etiqueta_xpo_{order_number}.pdf",
-                headers={"Content-Disposition": f'attachment; filename="etiqueta_xpo_{order_number}.pdf"'},
-            )
 
     return result
 

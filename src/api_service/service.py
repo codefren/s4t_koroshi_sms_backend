@@ -928,7 +928,7 @@ def batch_update_picked_order(
         dest_cod_tienda= (erp.cod_tienda if erp else None) or "",
         obs_linea1        = f"{order.nombre_cliente or ''} / PACKING / {order.numero_orden}",
         #referencia        = f"{order.numero_pedido or ''} - {fecha_now.strftime('%Y%m%d')}",
-        referencia        = f"9999900000 - {fecha_now.strftime('%Y%m%d')}",
+        referencia        = f"0000099999 - {fecha_now.strftime('%Y%m%d')}",
         fecha_expedicion  = fecha_now,
         total_cajas    = total_cajas if total_cajas > 0 else 1,
         tipo_caja      = "5",
@@ -938,7 +938,7 @@ def batch_update_picked_order(
         volumen_neto   = erp.volumen      if erp else 0.0,
         volumen_bruto  = erp.volumen      if erp else 0.0,
         #nro_pedido_ventas = order.numero_pedido or "",
-        nro_pedido_ventas = "9999900000",
+        nro_pedido_ventas = "0000099999",
         nro_su_pedido     = (erp.ped_cli if erp else None) or "",
     )
 
