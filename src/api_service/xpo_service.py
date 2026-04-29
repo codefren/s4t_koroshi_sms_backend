@@ -89,13 +89,15 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
             return str(val)
         return escape(str(val)) if val else ""
 
+    # tns = http://tempuri.org/ (operation wrapper + top-level fields)
+    # mc  = http://schemas.datacontract.org/2004/07/XPOTrackAndTrace.MessageContracts
+    #       (children of expedicion, articulos, referenciaPedido, unidadesManipulacion)
     xml = f"""<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:tns="http://tempuri.org/">
+               xmlns:tns="http://tempuri.org/"
+               xmlns:mc="http://schemas.datacontract.org/2004/07/XPOTrackAndTrace.MessageContracts">
   <soap:Body>
-    <tns:RegistraExpedicion>
-
-      <!-- Credenciales (fijas) -->
+    <tns:RegistraExpedicionRequest>
       <tns:UserName>{XPO_USER}</tns:UserName>
       <tns:Password>{XPO_PASSWORD}</tns:Password>
       <tns:EnviarEmail>1</tns:EnviarEmail>
@@ -110,104 +112,95 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
       <tns:Preffix></tns:Preffix>
       <tns:FechaEntrega></tns:FechaEntrega>
 
-      <!-- Expedicion -->
-      <tns:Expedicion>
-        <tns:CodCliente>{XPO_COD_CLIENTE}</tns:CodCliente>
+      <tns:expedicion>
+        <mc:CodCliente>{XPO_COD_CLIENTE}</mc:CodCliente>
+        <mc:OrigenCodTienda></mc:OrigenCodTienda>
+        <mc:OrigenNombreTienda>KOROSHI</mc:OrigenNombreTienda>
+        <mc:OrigenDireccion>Calle Mogoda 6-10, Pol.Ind.Cant Salvatella</mc:OrigenDireccion>
+        <mc:OrigenDireccionLinea1></mc:OrigenDireccionLinea1>
+        <mc:OrigenDireccionLinea2></mc:OrigenDireccionLinea2>
+        <mc:OrigenCP>08210</mc:OrigenCP>
+        <mc:OrigenLocalidad>Barbera del Valles</mc:OrigenLocalidad>
+        <mc:OrigenProvincia>Barcelona</mc:OrigenProvincia>
+        <mc:OrigenPais>ES</mc:OrigenPais>
+        <mc:OrigenTelefono></mc:OrigenTelefono>
+        <mc:OrigenMovil></mc:OrigenMovil>
+        <mc:OrigenFax></mc:OrigenFax>
+        <mc:OrigenEmail>almacen@koroshi.tv</mc:OrigenEmail>
+        <mc:OrigenContactoNombre>KOROSHI</mc:OrigenContactoNombre>
+        <mc:OrigenContactoTelefono>(34) 937984446</mc:OrigenContactoTelefono>
+        <mc:OrigenContactoMovil>658877772</mc:OrigenContactoMovil>
+        <mc:OrigenContactoEmail>almacen@koroshi.tv</mc:OrigenContactoEmail>
+        <mc:TipoDestino>1</mc:TipoDestino>
+        <mc:DestinoCodTienda>{e(params.dest_cod_tienda)}</mc:DestinoCodTienda>
+        <mc:DestinoNombreTienda>{e(params.dest_nombre)}</mc:DestinoNombreTienda>
+        <mc:DestinoDireccion>{e(params.dest_direccion)}</mc:DestinoDireccion>
+        <mc:DestinoDireccionLinea1></mc:DestinoDireccionLinea1>
+        <mc:DestinoDireccionLinea2></mc:DestinoDireccionLinea2>
+        <mc:DestinoCP>{e(params.dest_cp)}</mc:DestinoCP>
+        <mc:DestinoLocalidad>{e(params.dest_localidad)}</mc:DestinoLocalidad>
+        <mc:DestinoProvincia>{e(params.dest_provincia)}</mc:DestinoProvincia>
+        <mc:DestinoPais>{e(params.dest_pais)}</mc:DestinoPais>
+        <mc:DestinoTelefono></mc:DestinoTelefono>
+        <mc:DestinoMovil>{e(params.dest_movil)}</mc:DestinoMovil>
+        <mc:DestinoFax></mc:DestinoFax>
+        <mc:DestinoEmail>{e(params.dest_email)}</mc:DestinoEmail>
+        <mc:DestinoContactoNombre></mc:DestinoContactoNombre>
+        <mc:DestinoContactoTelefono></mc:DestinoContactoTelefono>
+        <mc:DestinoContactoMovil></mc:DestinoContactoMovil>
+        <mc:DestinoContactoEmail></mc:DestinoContactoEmail>
+        <mc:DestinoAltCodTienda></mc:DestinoAltCodTienda>
+        <mc:DestinoAltNombreReceptor></mc:DestinoAltNombreReceptor>
+        <mc:DestinoAltReceptorEmail></mc:DestinoAltReceptorEmail>
+        <mc:DestinoAltReceptorTelefono></mc:DestinoAltReceptorTelefono>
+        <mc:ObservacionesLinea1>{e(params.obs_linea1)}</mc:ObservacionesLinea1>
+        <mc:ObservacionesLinea2></mc:ObservacionesLinea2>
+        <mc:Peso></mc:Peso>
+        <mc:Referencia>{e(params.referencia)}</mc:Referencia>
+        <mc:ValorCOD></mc:ValorCOD>
+        <mc:FechaExpedicion>{fecha_str}</mc:FechaExpedicion>
+        <mc:EnviarEtiquetasEmail>1</mc:EnviarEtiquetasEmail>
+        <mc:OrigenReferencia></mc:OrigenReferencia>
+        <mc:DestinoReferencia></mc:DestinoReferencia>
+      </tns:expedicion>
 
-        <!-- ORIGEN (fijo — almacén Koroshi) -->
-        <tns:OrigenCodTienda></tns:OrigenCodTienda>
-        <tns:OrigenNombreTienda>KOROSHI</tns:OrigenNombreTienda>
-        <tns:OrigenDireccion>Calle Mogoda 6-10, Pol.Ind.Cant Salvatella</tns:OrigenDireccion>
-        <tns:OrigenDireccionLinea1></tns:OrigenDireccionLinea1>
-        <tns:OrigenDireccionLinea2></tns:OrigenDireccionLinea2>
-        <tns:OrigenCP>08210</tns:OrigenCP>
-        <tns:OrigenLocalidad>Barbera del Valles</tns:OrigenLocalidad>
-        <tns:OrigenProvincia>Barcelona</tns:OrigenProvincia>
-        <tns:OrigenPais>ES</tns:OrigenPais>
-        <tns:OrigenTelefono></tns:OrigenTelefono>
-        <tns:OrigenMovil></tns:OrigenMovil>
-        <tns:OrigenFax></tns:OrigenFax>
-        <tns:OrigenEmail>almacen@koroshi.tv</tns:OrigenEmail>
-        <tns:OrigenContactoNombre>KOROSHI</tns:OrigenContactoNombre>
-        <tns:OrigenContactoTelefono>(34) 937984446</tns:OrigenContactoTelefono>
-        <tns:OrigenContactoMovil>658877772</tns:OrigenContactoMovil>
-        <tns:OrigenContactoEmail>almacen@koroshi.tv</tns:OrigenContactoEmail>
+      <tns:articulos>
+        <mc:WSArticulo_Request>
+          <mc:ArticuloCodigo>GENERICO</mc:ArticuloCodigo>
+          <mc:ArticuloDescripcion>AGRUPACION CAJA</mc:ArticuloDescripcion>
+          <mc:ArticuloCantidad>{params.total_unidades}</mc:ArticuloCantidad>
+          <mc:ArticuloPesoNeto>{params.peso_neto}</mc:ArticuloPesoNeto>
+          <mc:ArticuloPesoBruto>{params.peso_bruto}</mc:ArticuloPesoBruto>
+          <mc:ArticuloVolumenNeto>{params.volumen_neto}</mc:ArticuloVolumenNeto>
+          <mc:ArticuloVolumenBruto>{params.volumen_bruto}</mc:ArticuloVolumenBruto>
+          <mc:ArticuloReferencia></mc:ArticuloReferencia>
+          <mc:ArticuloNumLinea>1</mc:ArticuloNumLinea>
+          <mc:ArticuloPrecio></mc:ArticuloPrecio>
+          <mc:ArticuloLote></mc:ArticuloLote>
+          <mc:ArticuloUOM></mc:ArticuloUOM>
+          <mc:ArticuloCodigoEAN></mc:ArticuloCodigoEAN>
+        </mc:WSArticulo_Request>
+      </tns:articulos>
 
-        <!-- DESTINO (variable) -->
-        <tns:TipoDestino>1</tns:TipoDestino>
-        <tns:DestinoCodTienda>{e(params.dest_cod_tienda)}</tns:DestinoCodTienda>
-        <tns:DestinoNombreTienda>{e(params.dest_nombre)}</tns:DestinoNombreTienda>
-        <tns:DestinoDireccion>{e(params.dest_direccion)}</tns:DestinoDireccion>
-        <tns:DestinoDireccionLinea1></tns:DestinoDireccionLinea1>
-        <tns:DestinoDireccionLinea2></tns:DestinoDireccionLinea2>
-        <tns:DestinoCP>{e(params.dest_cp)}</tns:DestinoCP>
-        <tns:DestinoLocalidad>{e(params.dest_localidad)}</tns:DestinoLocalidad>
-        <tns:DestinoProvincia>{e(params.dest_provincia)}</tns:DestinoProvincia>
-        <tns:DestinoPais>{e(params.dest_pais)}</tns:DestinoPais>
-        <tns:DestinoTelefono></tns:DestinoTelefono>
-        <tns:DestinoMovil>{e(params.dest_movil)}</tns:DestinoMovil>
-        <tns:DestinoFax></tns:DestinoFax>
-        <tns:DestinoEmail>{e(params.dest_email)}</tns:DestinoEmail>
-        <tns:DestinoContactoNombre></tns:DestinoContactoNombre>
-        <tns:DestinoContactoTelefono></tns:DestinoContactoTelefono>
-        <tns:DestinoContactoMovil></tns:DestinoContactoMovil>
-        <tns:DestinoContactoEmail></tns:DestinoContactoEmail>
-        <tns:DestinoAltCodTienda></tns:DestinoAltCodTienda>
-        <tns:DestinoAltNombreReceptor></tns:DestinoAltNombreReceptor>
-        <tns:DestinoAltReceptorEmail></tns:DestinoAltReceptorEmail>
-        <tns:DestinoAltReceptorTelefono></tns:DestinoAltReceptorTelefono>
+      <tns:referenciaPedido>
+        <mc:NroPedidoVentas>{e(params.nro_pedido_ventas)}</mc:NroPedidoVentas>
+        <mc:NroSuPedido>{e(params.nro_su_pedido)}</mc:NroSuPedido>
+      </tns:referenciaPedido>
 
-        <!-- Observaciones / Referencia (variable) -->
-        <tns:ObservacionesLinea1>{e(params.obs_linea1)}</tns:ObservacionesLinea1>
-        <tns:ObservacionesLinea2></tns:ObservacionesLinea2>
-        <tns:Peso></tns:Peso>
-        <tns:Referencia>{e(params.referencia)}</tns:Referencia>
-        <tns:ValorCOD></tns:ValorCOD>
-        <tns:FechaExpedicion>{fecha_str}</tns:FechaExpedicion>
-        <tns:EnviarEtiquetasEmail>1</tns:EnviarEtiquetasEmail>
-        <tns:OrigenReferencia></tns:OrigenReferencia>
-        <tns:DestinoReferencia></tns:DestinoReferencia>
-      </tns:Expedicion>
+      <tns:unidadesManipulacion>
+        <mc:WSUdsManipulac_Request>
+          <mc:CodigoVLU>{e(params.tipo_caja)}</mc:CodigoVLU>
+          <mc:VLUCantidad>{params.total_cajas}</mc:VLUCantidad>
+          <mc:VLUPesoNeto>{params.peso_neto}</mc:VLUPesoNeto>
+          <mc:VLUPesoBruto>{params.peso_bruto}</mc:VLUPesoBruto>
+          <mc:VLUVolumenNeto>{params.volumen_neto}</mc:VLUVolumenNeto>
+          <mc:VLUVolumenBruto>{params.volumen_bruto}</mc:VLUVolumenBruto>
+          <mc:VLUMetrosLinealesNetos></mc:VLUMetrosLinealesNetos>
+          <mc:VLUMetrosLinealesBrutos></mc:VLUMetrosLinealesBrutos>
+        </mc:WSUdsManipulac_Request>
+      </tns:unidadesManipulacion>
 
-      <!-- Unidades de manipulación (variable: cajas + tipo) -->
-      <tns:UnidadesManipulacion>
-        <tns:WSUdsManipulac_Request>
-          <tns:CodigoVLU>{e(params.tipo_caja)}</tns:CodigoVLU>
-          <tns:VLUCantidad>{params.total_cajas}</tns:VLUCantidad>
-          <tns:VLUPesoNeto>{params.peso_neto}</tns:VLUPesoNeto>
-          <tns:VLUPesoBruto>{params.peso_bruto}</tns:VLUPesoBruto>
-          <tns:VLUVolumenNeto>{params.volumen_neto}</tns:VLUVolumenNeto>
-          <tns:VLUVolumenBruto>{params.volumen_bruto}</tns:VLUVolumenBruto>
-          <tns:VLUMetrosLinealesNetos></tns:VLUMetrosLinealesNetos>
-          <tns:VLUMetrosLinealesBrutos></tns:VLUMetrosLinealesBrutos>
-        </tns:WSUdsManipulac_Request>
-      </tns:UnidadesManipulacion>
-
-      <!-- Artículos (fijo GENERICO, variable: cantidad total) -->
-      <tns:Articulos>
-        <tns:WSArticulo_Request>
-          <tns:ArticuloCodigo>GENERICO</tns:ArticuloCodigo>
-          <tns:ArticuloDescripcion>AGRUPACION CAJA</tns:ArticuloDescripcion>
-          <tns:ArticuloCantidad>{params.total_unidades}</tns:ArticuloCantidad>
-          <tns:ArticuloPesoNeto>{params.peso_neto}</tns:ArticuloPesoNeto>
-          <tns:ArticuloPesoBruto>{params.peso_bruto}</tns:ArticuloPesoBruto>
-          <tns:ArticuloVolumenNeto>{params.volumen_neto}</tns:ArticuloVolumenNeto>
-          <tns:ArticuloReferencia></tns:ArticuloReferencia>
-          <tns:ArticuloNumLinea>1</tns:ArticuloNumLinea>
-          <tns:ArticuloPrecio></tns:ArticuloPrecio>
-          <tns:ArticuloLote></tns:ArticuloLote>
-          <tns:ArticuloUOM></tns:ArticuloUOM>
-          <tns:ArticuloCodigoEAN></tns:ArticuloCodigoEAN>
-        </tns:WSArticulo_Request>
-      </tns:Articulos>
-
-      <!-- Referencia pedido (variable) -->
-      <tns:ReferenciaPedido>
-        <tns:NroPedidoVentas>{e(params.nro_pedido_ventas)}</tns:NroPedidoVentas>
-        <tns:NroSuPedido>{e(params.nro_su_pedido)}</tns:NroSuPedido>
-      </tns:ReferenciaPedido>
-
-    </tns:RegistraExpedicion>
+    </tns:RegistraExpedicionRequest>
   </soap:Body>
 </soap:Envelope>"""
 
