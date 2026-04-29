@@ -133,7 +133,7 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
         <mc:OrigenContactoMovil>658877772</mc:OrigenContactoMovil>
         <mc:OrigenContactoEmail>almacen@koroshi.tv</mc:OrigenContactoEmail>
         <mc:TipoDestino>1</mc:TipoDestino>
-        <mc:DestinoCodTienda>{e(params.dest_cod_tienda)}</mc:DestinoCodTienda>
+        <mc:DestinoCodTienda></mc:DestinoCodTienda>
         <mc:DestinoNombreTienda>{e(params.dest_nombre)}</mc:DestinoNombreTienda>
         <mc:DestinoDireccion>{e(params.dest_direccion)}</mc:DestinoDireccion>
         <mc:DestinoDireccionLinea1></mc:DestinoDireccionLinea1>
