@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # ── XPO endpoint config (override via env vars) ────────────────────────────────
 XPO_ENDPOINT_URL = os.getenv(
     "XPO_ENDPOINT_URL",
-    "http://localhost/XpoService/TTService.svc"   # TODO: set real URL in .env
+    "https://openservices-pre.fieldeas.com/Apps/xpows/TTService.svc"
 )
 XPO_USER        = os.getenv("XPO_USER",     "666194")
 XPO_PASSWORD    = os.getenv("XPO_PASSWORD", "123qwe!E")
