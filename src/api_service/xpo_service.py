@@ -96,6 +96,7 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:tns="http://tempuri.org/"
                xmlns:mc="http://schemas.datacontract.org/2004/07/XPOTrackAndTrace.MessageContracts">
+  <soap:Header/>
   <soap:Body>
     <tns:RegistraExpedicionRequest>
       <tns:UserName>{XPO_USER}</tns:UserName>
@@ -275,5 +276,5 @@ def _parse_consignment_id(xml_text: str) -> str:
     Returns empty string if not found.
     """
     import re
-    match = re.search(r"<[^>]*ConsignmentId[^>]*>([^<]+)<", xml_text)
+    match = re.search(r"<[^>]*ConsignmentID[^>]*>([^<]+)<", xml_text, re.IGNORECASE)
     return match.group(1).strip() if match else ""
