@@ -41,7 +41,6 @@ class PackingInfo:
     ped_cli:      str = ""   # client's own purchase order number → nro_su_pedido in XPO
     cod_tienda:   str = ""   # store/branch code → DestinoCodTienda in XPO
 
-
 _SQL = """
     SELECT
         a.fldIdCliente   AS Cliente,
@@ -54,10 +53,9 @@ _SQL = """
         b.fldPais        AS Pais,
         b.fldEmail       AS Email,
         b.fldTelf1       AS Telefono,
-        3                             AS NumCajas,
-        d.fldVolumen   * 3            AS Volumen,
-        d.fldPesoNeto  * 3            AS PesoNeto,
-        d.fldPesoBruto * 3            AS PesoBruto,
+        d.fldVolumen                  AS Volumen,
+        d.fldPesoNeto                 AS PesoNeto,
+        d.fldPesoBruto                AS PesoBruto,
         a.fldFechaPacking             AS Fecha,
         a.fldCanPack                  AS Cantidad,
         a.fldIdPedCli                 AS PedCli,
@@ -90,7 +88,7 @@ def _get_erp_connection() -> pyodbc.Connection:
     return pyodbc.connect(conn_str, timeout=10)
 
 
-def get_packing_info(packing_id: str) -> Optional[PackingInfo]:
+def get_packing_info(packing_id: str, num_cajas: int = 1) -> Optional[PackingInfo]:
     """
     Fetch packing + client data from the ERP database for a given packing_id.
 
@@ -112,7 +110,7 @@ def get_packing_info(packing_id: str) -> Optional[PackingInfo]:
             logger.warning(f"No ERP packing record found for packing_id={packing_id}")
             return None
 
-        return PackingInfo(
+        info = PackingInfo(
             cliente    = str(row.Cliente   or ""),
             documento  = str(row.Documento or ""),
             nombre     = str(row.Nombre    or ""),
@@ -123,14 +121,17 @@ def get_packing_info(packing_id: str) -> Optional[PackingInfo]:
             pais       = str(row.Pais      or "ES"),
             email      = str(row.Email     or ""),
             telefono   = str(row.Telefono  or ""),
-            volumen    = float(row.Volumen   or 0),
-            peso_neto  = float(row.PesoNeto  or 0),
-            peso_bruto = float(row.PesoBruto or 0),
+            volumen    = float(row.Volumen   or 0) * num_cajas,
+            peso_neto  = float(row.PesoNeto  or 0) * num_cajas,
+            peso_bruto = float(row.PesoBruto or 0) * num_cajas,
             fecha      = row.Fecha,
             cantidad   = int(row.Cantidad or 0),
             ped_cli    = str(row.PedCli    or ""),
             cod_tienda = str(row.CodTienda or ""),
         )
+
+        logger.info(f"ERP packing info fetched for packing_id={packing_id}: {info}")
+        return info
 
     except pyodbc.Error as exc:
         logger.error(f"ERP DB error fetching packing_id={packing_id}: {exc}")

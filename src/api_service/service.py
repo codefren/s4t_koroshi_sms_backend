@@ -892,8 +892,9 @@ def batch_update_picked_order(
     fecha_now = datetime.now()
     total_cajas    = len([l for l in lines_updates if l.box_code])
     total_unidades = sum(l.quantity_served for l in lines_updates if l.quantity_served > 0)
+    logger.info(f"total_cajas={total_cajas}, total_unidades={total_unidades}")
 
-    erp = get_packing_info(order.numero_orden)
+    erp = get_packing_info(order.numero_orden, num_cajas=total_cajas if total_cajas > 0 else 1)
 
     xpo_params = XpoExpedicionParams(
         dest_nombre    = (erp.nombre    if erp else None) or order.nombre_cliente or "",
@@ -911,6 +912,10 @@ def batch_update_picked_order(
         total_cajas    = total_cajas if total_cajas > 0 else 1,
         tipo_caja      = "5",
         total_unidades = total_unidades,
+        peso_neto      = erp.peso_neto    if erp else 0.0,
+        peso_bruto     = erp.peso_bruto   if erp else 0.0,
+        volumen_neto   = erp.volumen      if erp else 0.0,
+        volumen_bruto  = erp.volumen      if erp else 0.0,
         nro_pedido_ventas = order.numero_pedido or "",
         nro_su_pedido     = (erp.ped_cli if erp else None) or "",
     )

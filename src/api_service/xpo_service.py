@@ -20,9 +20,9 @@ XPO_ENDPOINT_URL = os.getenv(
     "http://localhost/XpoService/TTService.svc"   # TODO: set real URL in .env
 )
 XPO_USER        = os.getenv("XPO_USER",     "666194")
-XPO_PASSWORD    = os.getenv("XPO_PASSWORD", "v-Rh)7%Y")
+XPO_PASSWORD    = os.getenv("XPO_PASSWORD", "123qwe!E")
 XPO_COD_CLIENTE = os.getenv("XPO_COD_CLIENTE", "666194")
-XPO_EMAIL_ETIQUETAS = os.getenv("XPO_EMAIL_ETIQUETAS", "almacen@koroshi.tv")
+XPO_EMAIL_ETIQUETAS = os.getenv("XPO_EMAIL_ETIQUETAS", "expediciones@koroshi.tv")
 
 
 # ── Parameter dataclass ────────────────────────────────────────────────────────
@@ -60,6 +60,12 @@ class XpoExpedicionParams:
     # ── Destino (campo adicional) ──────────────────────────────────────────────
     dest_cod_tienda: str = ""   # DestinoCodTienda — store/branch code from ERP
 
+    # ── Pesos / volúmenes (del ERP) ───────────────────────────────────────────
+    peso_neto:     float = 0.0
+    peso_bruto:    float = 0.0
+    volumen_neto:  float = 0.0
+    volumen_bruto: float = 0.0
+
     # ── Referencia pedido ─────────────────────────────────────────────────────
     nro_pedido_ventas: str = ""
     nro_su_pedido:     str = ""
@@ -94,10 +100,10 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
       <tns:TipoRespuesta>1</tns:TipoRespuesta>
       <tns:TotalUnidadesManipulacion>{params.total_cajas}</tns:TotalUnidadesManipulacion>
       <tns:VLU></tns:VLU>
-      <tns:PesoBruto>0</tns:PesoBruto>
-      <tns:PesoNeto>0</tns:PesoNeto>
-      <tns:VolumenNeto>0</tns:VolumenNeto>
-      <tns:VolumenOperacional>0</tns:VolumenOperacional>
+      <tns:PesoBruto>{params.peso_bruto}</tns:PesoBruto>
+      <tns:PesoNeto>{params.peso_neto}</tns:PesoNeto>
+      <tns:VolumenNeto>{params.volumen_neto}</tns:VolumenNeto>
+      <tns:VolumenOperacional>{params.volumen_bruto}</tns:VolumenOperacional>
       <tns:Preffix></tns:Preffix>
       <tns:FechaEntrega></tns:FechaEntrega>
 
@@ -164,11 +170,11 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
       <tns:UnidadesManipulacion>
         <tns:WSUdsManipulac_Request>
           <tns:CodigoVLU>{e(params.tipo_caja)}</tns:CodigoVLU>
-          <tns:VLUCantidad>{params.total_cajas}</tns:VLUCantidad>
-          <tns:VLUPesoNeto>0</tns:VLUPesoNeto>
-          <tns:VLUPesoBruto>0</tns:VLUPesoBruto>
-          <tns:VLUVolumenNeto>0</tns:VLUVolumenNeto>
-          <tns:VLUVolumenBruto>0</tns:VLUVolumenBruto>
+          <tns:VLUCantidad>{e(params.total_unidades)}</tns:VLUCantidad>
+          <tns:VLUPesoNeto>{params.peso_neto}</tns:VLUPesoNeto>
+          <tns:VLUPesoBruto>{params.peso_bruto}</tns:VLUPesoBruto>
+          <tns:VLUVolumenNeto>{params.volumen_neto}</tns:VLUVolumenNeto>
+          <tns:VLUVolumenBruto>{params.volumen_bruto}</tns:VLUVolumenBruto>
           <tns:VLUMetrosLinealesNetos></tns:VLUMetrosLinealesNetos>
           <tns:VLUMetrosLinealesBrutos></tns:VLUMetrosLinealesBrutos>
         </tns:WSUdsManipulac_Request>
@@ -180,9 +186,9 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
           <tns:ArticuloCodigo>GENERICO</tns:ArticuloCodigo>
           <tns:ArticuloDescripcion>AGRUPACION CAJA</tns:ArticuloDescripcion>
           <tns:ArticuloCantidad>{params.total_unidades}</tns:ArticuloCantidad>
-          <tns:ArticuloPesoNeto>0</tns:ArticuloPesoNeto>
-          <tns:ArticuloPesoBruto>0</tns:ArticuloPesoBruto>
-          <tns:ArticuloVolumenNeto>0</tns:ArticuloVolumenNeto>
+          <tns:ArticuloPesoNeto>{params.peso_neto}</tns:ArticuloPesoNeto>
+          <tns:ArticuloPesoBruto>{params.peso_bruto}</tns:ArticuloPesoBruto>
+          <tns:ArticuloVolumenNeto>{params.volumen_neto}</tns:ArticuloVolumenNeto>
           <tns:ArticuloReferencia></tns:ArticuloReferencia>
           <tns:ArticuloNumLinea>1</tns:ArticuloNumLinea>
           <tns:ArticuloPrecio></tns:ArticuloPrecio>
@@ -194,8 +200,8 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
 
       <!-- Referencia pedido (variable) -->
       <tns:ReferenciaPedido>
-        <tns:NroPedidoVentas>{e(params.nro_pedido_ventas)}</tns:NroPedidoVentas>
-        <tns:NroSuPedido>{e(params.nro_su_pedido)}</tns:NroSuPedido>
+        <tns:NroPedidoVentas></tns:NroPedidoVentas>
+        <tns:NroSuPedido></tns:NroSuPedido>
       </tns:ReferenciaPedido>
 
     </tns:RegistraExpedicion>
