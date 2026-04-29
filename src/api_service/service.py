@@ -12,11 +12,31 @@ import os
 import logging
 
 from src.api_service.xpo_service import XpoExpedicionParams, send_xpo_expedicion
+
+XPO_LABELS_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "..", "media", "xpo", "labels"
+)
+
+
+def _download_xpo_pdf(consignment_id: str, pdf_url: str) -> Optional[str]:
+    """Downloads the XPO label PDF and returns its relative path for /media serving."""
+    try:
+        os.makedirs(XPO_LABELS_DIR, exist_ok=True)
+        filename  = f"{consignment_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        full_path = os.path.join(XPO_LABELS_DIR, filename)
+        r = requests.get(pdf_url, timeout=30)
+        r.raise_for_status()
+        with open(full_path, "wb") as f:
+            f.write(r.content)
+        return f"xpo/labels/{filename}"   # relativa a /media
+    except Exception as exc:
+        logger.error(f"Error descargando PDF XPO: {exc}")
+        return None
 from src.api_service.erp_service import get_packing_info
 
 from src.adapters.secondary.database.orm import (
     Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen,
-    PackingPro, PackingProLine
+    PackingPro, PackingProLine, XpoExpedicion
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
@@ -923,21 +943,42 @@ def batch_update_picked_order(
     )
 
     xpo_result = send_xpo_expedicion(xpo_params)
+
+    pdf_path = None
     if xpo_result["success"]:
-        logger.info(f"XPO expedition registered — consignment_id: {xpo_result.get('consignment_id')}")
+        consignment_id = xpo_result.get("consignment_id", "")
+        pdf_url        = xpo_result.get("pdf_url", "")
+        logger.info(f"XPO expedition registered — consignment_id: {consignment_id}")
+
+        pdf_path = _download_xpo_pdf(consignment_id, pdf_url) if pdf_url else None
+
+        db.add(XpoExpedicion(
+            order_id         = order.id,
+            numero_orden     = order_number,
+            consignment_id   = consignment_id,
+            referencia       = xpo_params.referencia,
+            pdf_url          = pdf_url,
+            pdf_path         = pdf_path,
+            fecha_expedicion = fecha_now,
+        ))
+        db.commit()
     else:
         logger.error(f"XPO expedition failed: {xpo_result.get('error')} — raw: {xpo_result.get('raw_response')}")
 
     return BatchUpdateOrderResponse(
-        status="dry_run",
-        message=f"XPO XML generado para la orden {order_number} (sin cambios en DB ni llamadas externas)",
+        status="ok" if xpo_result["success"] else "error",
+        message=f"Expedición XPO registrada para la orden {order_number}" if xpo_result["success"] else xpo_result.get("error", "XPO error"),
         order_number=order_number,
         order_status=current_status,
         lines_updated=0,
         lines_completed=0,
         lines_partial=0,
         lines_pending=len(lines_updates),
-        external_api_data={"xpo_xml": xpo_result.get("raw_response")}
+        external_api_data={
+            "consignment_id": xpo_result.get("consignment_id"),
+            "pdf_url":        xpo_result.get("pdf_url"),
+            "pdf_path":       pdf_path,
+        }
     )
 
     # except requests.exceptions.RequestException as e:

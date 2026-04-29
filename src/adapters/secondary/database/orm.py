@@ -1496,5 +1496,25 @@ class PackingProLine(Base):
         ),
     )
 
+
+class XpoExpedicion(Base):
+    """
+    Registro de expediciones enviadas a XPO Logistics.
+    Una por cada orden que pasa por el flujo de packing y se registra en XPO.
+    """
+    __tablename__ = "xpo_expediciones"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    order_id       = Column(Integer, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    numero_orden   = Column(String(100), nullable=False, index=True)
+    consignment_id = Column(String(20), nullable=True, index=True)
+    referencia     = Column(String(100), nullable=True)
+    pdf_url        = Column(String(500), nullable=True)
+    pdf_path       = Column(String(500), nullable=True)   # ruta relativa servida por /media
+    fecha_expedicion = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at     = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    order = relationship("Order", backref="xpo_expediciones")
+
     def __repr__(self):
         return f"<StockMovement {self.id} {self.tipo} qty={self.cantidad} loc={self.product_location_id}>"

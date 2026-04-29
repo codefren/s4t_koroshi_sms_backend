@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import sentry_sdk
 from src.adapters.secondary.database.config import engine, Base
@@ -92,6 +93,10 @@ app.include_router(stock_movement_router, prefix="/api/v1")
 app.include_router(ws_router)
 app.include_router(operator_ws_router, tags=["WebSocket PDA"])
 app.include_router(api_service_router, prefix="/api/service", tags=["B2B Service API"])
+
+MEDIA_DIR = os.path.join(os.path.dirname(__file__), "..", "media")
+os.makedirs(MEDIA_DIR, exist_ok=True)
+app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 
 class RootResponse(BaseModel):
     message: str

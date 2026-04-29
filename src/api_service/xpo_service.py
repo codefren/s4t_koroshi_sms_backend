@@ -246,6 +246,7 @@ def send_xpo_expedicion(params: XpoExpedicionParams) -> dict:
                 "success":        True,
                 "status_code":    response.status_code,
                 "consignment_id": _parse_consignment_id(response.text),
+                "pdf_url":        _parse_pdf_url(response.text),
                 "raw_response":   response.text,
                 "error":          None,
             }
@@ -254,6 +255,7 @@ def send_xpo_expedicion(params: XpoExpedicionParams) -> dict:
             "success":        False,
             "status_code":    response.status_code,
             "consignment_id": None,
+            "pdf_url":        None,
             "raw_response":   response.text,
             "error":          f"XPO returned HTTP {response.status_code}",
         }
@@ -265,16 +267,20 @@ def send_xpo_expedicion(params: XpoExpedicionParams) -> dict:
             "success":        False,
             "status_code":    None,
             "consignment_id": None,
+            "pdf_url":        None,
             "raw_response":   None,
             "error":          error_msg,
         }
 
 
 def _parse_consignment_id(xml_text: str) -> str:
-    """
-    Extracts ConsignmentId from XPO SOAP response.
-    Returns empty string if not found.
-    """
     import re
     match = re.search(r"<[^>]*ConsignmentID[^>]*>([^<]+)<", xml_text, re.IGNORECASE)
+    return match.group(1).strip() if match else ""
+
+
+def _parse_pdf_url(xml_text: str) -> str:
+    """Extracts Cuerpo (PDF URL) from XPO SOAP response."""
+    import re
+    match = re.search(r"<[^>]*Cuerpo[^>]*>([^<]+)<", xml_text, re.IGNORECASE)
     return match.group(1).strip() if match else ""

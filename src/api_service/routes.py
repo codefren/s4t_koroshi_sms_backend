@@ -2,8 +2,10 @@
 FastAPI routes for B2B Customer API Service.
 """
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import os
 
 from src.adapters.secondary.database.config import get_db
 from src.adapters.secondary.database.orm import Customer
@@ -262,7 +264,6 @@ def batch_update_order_endpoint(
 
 @router.put(
     "/orders/{order_number}/batch-update",
-    response_model=BatchUpdateOrderResponse,
     tags=["Orders"]
 )
 def batch_update_picked_order_endpoint(
@@ -273,29 +274,27 @@ def batch_update_picked_order_endpoint(
 ):
     """
     Update ALL lines of an order that is in **PICKED** status.
-
-    The order must be in PICKED status (picking completed by operator).
-    This endpoint blocks updates on orders in any other status.
-
-    **Example:**
-    ```
-    curl -X PUT -H "X-Api-Key: cust_live_abc123..." \\
-         -H "Content-Type: application/json" \\
-         -d '{
-           "lines": [
-             {"sku": "SHOE-BLK-42-001", "quantity_served": 10, "box_code": "BOX-001"},
-             {"sku": "SHOE-RED-38-002", "quantity_served": 0}
-           ]
-         }' \\
-         http://localhost:8000/api/service/orders/ORD-12345/batch-update
-    ```
+    If XPO expedition succeeds, returns the PDF label as a direct download.
     """
-    return batch_update_picked_order(
+    result = batch_update_picked_order(
         order_number=order_number,
         lines_updates=request.lines,
-        # customer=customer,
         db=db
     )
+
+    pdf_relative = (result.external_api_data or {}).get("pdf_path")
+    if pdf_relative:
+        media_root = os.path.join(os.path.dirname(__file__), "..", "..", "media")
+        full_path  = os.path.join(media_root, pdf_relative)
+        if os.path.exists(full_path):
+            return FileResponse(
+                path=full_path,
+                media_type="application/pdf",
+                filename=f"etiqueta_xpo_{order_number}.pdf",
+                headers={"Content-Disposition": f'attachment; filename="etiqueta_xpo_{order_number}.pdf"'},
+            )
+
+    return result
 
 
 @router.put(
