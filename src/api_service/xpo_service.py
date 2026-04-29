@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # ── XPO endpoint config (override via env vars) ────────────────────────────────
 XPO_ENDPOINT_URL = os.getenv(
     "XPO_ENDPOINT_URL",
-    "https://openservices-pre.fieldeas.com/Apps/xpows/TTService.svc"
+    "https://openservices-pre.fieldeas.com/apps/xpows/TTService.svc"
 )
 XPO_USER        = os.getenv("XPO_USER",     "666194")
 XPO_PASSWORD    = os.getenv("XPO_PASSWORD", "123qwe!E")
@@ -83,7 +83,10 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
     fecha = params.fecha_expedicion or datetime.now()
     fecha_str = fecha.strftime("%d/%m/%Y")
 
-    def e(val: str) -> str:
+    def e(val) -> str:
+        """Escape string values; numbers are formatted directly."""
+        if isinstance(val, (int, float)):
+            return str(val)
         return escape(str(val)) if val else ""
 
     xml = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -170,7 +173,7 @@ def build_xpo_soap_xml(params: XpoExpedicionParams) -> str:
       <tns:UnidadesManipulacion>
         <tns:WSUdsManipulac_Request>
           <tns:CodigoVLU>{e(params.tipo_caja)}</tns:CodigoVLU>
-          <tns:VLUCantidad>{e(params.total_unidades)}</tns:VLUCantidad>
+          <tns:VLUCantidad>{params.total_cajas}</tns:VLUCantidad>
           <tns:VLUPesoNeto>{params.peso_neto}</tns:VLUPesoNeto>
           <tns:VLUPesoBruto>{params.peso_bruto}</tns:VLUPesoBruto>
           <tns:VLUVolumenNeto>{params.volumen_neto}</tns:VLUVolumenNeto>
