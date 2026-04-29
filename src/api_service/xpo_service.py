@@ -230,56 +230,47 @@ def send_xpo_expedicion(params: XpoExpedicionParams) -> dict:
     logger.info(f"URL: {XPO_ENDPOINT_URL}")
     logger.info(f"SOAP Body:\n{soap_xml}")
 
-    return {
-        "success":        True,
-        "status_code":    None,
-        "consignment_id": "",
-        "raw_response":   soap_xml,
-        "error":          None,
-    }
+    try:
+        response = requests.post(
+            XPO_ENDPOINT_URL,
+            data=soap_xml.encode("utf-8"),
+            headers={
+                "Content-Type": "text/xml; charset=utf-8",
+                "SOAPAction":   '"http://tempuri.org/ITTService/RegistraExpedicion"',
+            },
+            timeout=30,
+        )
 
-    # TODO: descomentar cuando el endpoint XPO esté disponible
-    # try:
-    #     response = requests.post(
-    #         XPO_ENDPOINT_URL,
-    #         data=soap_xml.encode("utf-8"),
-    #         headers={
-    #             "Content-Type": "text/xml; charset=utf-8",
-    #             "SOAPAction":   '"http://tempuri.org/ITTService/RegistraExpedicion"',
-    #         },
-    #         timeout=30,
-    #     )
-    #
-    #     logger.info(f"XPO response — status: {response.status_code}")
-    #     logger.info(f"XPO response body: {response.text}")
-    #
-    #     if response.status_code == 200:
-    #         return {
-    #             "success":        True,
-    #             "status_code":    response.status_code,
-    #             "consignment_id": _parse_consignment_id(response.text),
-    #             "raw_response":   response.text,
-    #             "error":          None,
-    #         }
-    #
-    #     return {
-    #         "success":        False,
-    #         "status_code":    response.status_code,
-    #         "consignment_id": None,
-    #         "raw_response":   response.text,
-    #         "error":          f"XPO returned HTTP {response.status_code}",
-    #     }
-    #
-    # except requests.exceptions.RequestException as exc:
-    #     error_msg = f"XPO connection error: {str(exc)}"
-    #     logger.error(error_msg)
-    #     return {
-    #         "success":        False,
-    #         "status_code":    None,
-    #         "consignment_id": None,
-    #         "raw_response":   None,
-    #         "error":          error_msg,
-    #     }
+        logger.info(f"XPO response — status: {response.status_code}")
+        logger.info(f"XPO response body: {response.text}")
+
+        if response.status_code == 200:
+            return {
+                "success":        True,
+                "status_code":    response.status_code,
+                "consignment_id": _parse_consignment_id(response.text),
+                "raw_response":   response.text,
+                "error":          None,
+            }
+
+        return {
+            "success":        False,
+            "status_code":    response.status_code,
+            "consignment_id": None,
+            "raw_response":   response.text,
+            "error":          f"XPO returned HTTP {response.status_code}",
+        }
+
+    except requests.exceptions.RequestException as exc:
+        error_msg = f"XPO connection error: {str(exc)}"
+        logger.error(error_msg)
+        return {
+            "success":        False,
+            "status_code":    None,
+            "consignment_id": None,
+            "raw_response":   None,
+            "error":          error_msg,
+        }
 
 
 def _parse_consignment_id(xml_text: str) -> str:

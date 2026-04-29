@@ -890,7 +890,7 @@ def batch_update_picked_order(
 
     # 9. Send expedition to XPO (DRY RUN: solo construye el XML, sin DB writes ni llamadas externas)
     fecha_now = datetime.now()
-    total_cajas    = len([l for l in lines_updates if l.box_code])
+    total_cajas    = len({l.box_code for l in lines_updates if l.box_code})
     total_unidades = sum(l.quantity_served for l in lines_updates if l.quantity_served > 0)
     logger.info(f"total_cajas={total_cajas}, total_unidades={total_unidades}")
 
