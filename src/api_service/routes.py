@@ -10,7 +10,8 @@ from typing import List, Optional
 import os
 
 from src.adapters.secondary.database.config import get_db
-from src.adapters.secondary.database.orm import Customer, EAN
+from src.adapters.secondary.database.orm import Customer, EAN, ProductReference as ProductReferenceORM
+from sqlalchemy import func as sa_func
 from src.api_service.auth import verify_customer_api_key
 from src.api_service.schemas import (
     OrderListItem,
@@ -684,11 +685,11 @@ async def download_products_by_season_csv(
         only_active=only_active,
     )
 
-    # Fetch all EANs for these products in a single query
-    product_ids = [p.id for p in products]
+    # Fetch all EANs for this season via JOIN (avoids SQL Server 2100-parameter limit)
     ean_rows = (
         db.query(EAN.product_reference_id, EAN.ean)
-        .filter(EAN.product_reference_id.in_(product_ids))
+        .join(ProductReferenceORM, EAN.product_reference_id == ProductReferenceORM.id)
+        .filter(sa_func.lower(ProductReferenceORM.temporada) == temporada.strip().lower())
         .all()
     )
     eans_by_product: dict = {}
