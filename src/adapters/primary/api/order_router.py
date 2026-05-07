@@ -4,7 +4,7 @@ Router para gestión de órdenes.
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func, case
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
@@ -81,7 +81,7 @@ def list_orders(
     query = db.query(Order).options(
         joinedload(Order.status),
         joinedload(Order.operator),
-        joinedload(Order.order_lines)  # Necesario para calcular total_items e items_completados
+        selectinload(Order.order_lines)  # selectinload es más eficiente con limit/offset para colecciones
     )
     
     # Aplicar filtros opcionales
@@ -342,7 +342,21 @@ def get_order_detail(
             asignaciones=asignaciones,
         )
         productos.append(producto)
-    
+
+    def _producto_pasillo_sort_key(p: OrderProductDetail) -> tuple:
+        detail = p.ubicacion_detalle
+        if not detail and p.asignaciones:
+            detail = p.asignaciones[0].ubicacion
+        if not detail or not detail.pasillo:
+            return (2, 0, "", 0)
+        pasillo = detail.pasillo.strip()
+        try:
+            return (0, int(pasillo), "", 0)
+        except (ValueError, TypeError):
+            return (1, 0, pasillo.upper(), 0)
+
+    productos.sort(key=_producto_pasillo_sort_key)
+
     # Calcular progreso
     progreso = 0.0
     if order.total_items > 0:
@@ -752,9 +766,15 @@ def optimize_picking_route(
     
     picking_route = []
     secuencia = 1
-    
-    for pasillo in sorted(stops_by_aisle.keys(), key=lambda p: (int(p) if p and p.isdigit() else float('inf'), p or '')):
-        for stop in stops_by_aisle[pasillo]:
+
+    def _aisle_sort_key(p: str):
+        # Numeric aisles first (1,2,3...), then alphabetic (A,B,C...)
+        p = p or ""
+        return (0, int(p), "") if p.isdigit() else (1, 0, p.upper())
+
+    for pasillo in sorted(stops_by_aisle.keys(), key=_aisle_sort_key):
+        # Within each aisle: ascending by ubicacion
+        for stop in sorted(stops_by_aisle[pasillo], key=lambda s: s.get("ubicacion") or ""):
             stop["secuencia"] = secuencia
             picking_route.append(stop)
             secuencia += 1

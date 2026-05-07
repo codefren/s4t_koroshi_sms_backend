@@ -27,6 +27,41 @@ from src.core.domain.models import (
 router = APIRouter(prefix="/operators", tags=["Operators"])
 
 
+def _order_line_location_sort_key(item: dict) -> tuple:
+    """
+    Clave de ordenamiento para líneas de orden por pasillo y ubicación.
+
+    Orden:
+    1. Pasillos numéricos (1, 2, 3 ... N) antes que alfabéticos (A, B ... Z)
+    2. Dentro de cada grupo, orden ascendente de pasillo
+    3. Dentro de cada pasillo, ubicaciones ascendentes
+    4. Sin ubicación → al final
+    """
+    loc = item.get("ubicacion") or {}
+    pasillo = (loc.get("pasillo") or "").strip()
+    ubicacion_str = (loc.get("ubicacion") or "").strip()
+
+    if not pasillo:
+        return (2, 0, "", 0)
+
+    try:
+        pasillo_num = int(pasillo)
+        pasillo_group = 0
+        pasillo_alpha = ""
+    except (ValueError, TypeError):
+        pasillo_num = 0
+        pasillo_group = 1
+        pasillo_alpha = pasillo.upper()
+
+    ubicacion_base = ubicacion_str.split("/")[0].strip() if ubicacion_str else ""
+    try:
+        ubicacion_num = int(ubicacion_base)
+    except (ValueError, TypeError):
+        ubicacion_num = 0
+
+    return (pasillo_group, pasillo_num, pasillo_alpha, ubicacion_num)
+
+
 @router.get("/", response_model=List[OperatorResponse])
 def list_operators(
     activo: Optional[bool] = Query(None, description="Filtrar por operarios activos/inactivos"),
@@ -544,9 +579,14 @@ def list_order_lines(
         # Incluir asignaciones multi-ubicación si existen
         if asignaciones:
             line_data["asignaciones"] = asignaciones
-        
+
         result.append(line_data)
-    
+
+    # Ordenar por pasillo (numéricos primero, luego alfabéticos) y ubicación ascendente.
+    # Solo cuando no se pide el modo "últimos 3", que ya tiene su propio orden.
+    if not ultimos:
+        result.sort(key=_order_line_location_sort_key)
+
     return result
 
 

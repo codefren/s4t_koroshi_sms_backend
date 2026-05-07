@@ -10,7 +10,7 @@ from src.adapters.secondary.database.orm import Customer, CustomerAlmacen
 from src.adapters.secondary.database.config import get_db
 
 
-async def verify_customer_api_key(
+def verify_customer_api_key(
     x_api_key: str = Header(..., description="Customer API Key"),
     request: Request = None,
     db: Session = Depends(get_db)

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import os
 
 from src.adapters.secondary.database.config import get_db
 from src.adapters.secondary.database.orm import Customer
@@ -20,12 +21,16 @@ from src.api_service.schemas import (
     CustomerResponse,
     BatchUpdateOrderRequest,
     BatchUpdateOrderResponse,
+    PickedBatchUpdateRequest,
     RegisterStockRequest,
     RegisterStockResponse,
     RegisterBoxNumberRequest,
     RegisterBoxNumberResponse,
     SeasonsListResponse,
     ProductsBySeasonResponse,
+    PackingProListResponse,
+    PackingProLinesResponse,
+
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
@@ -33,11 +38,14 @@ from src.api_service.service import (
     get_order_lines_for_customer,
     update_order_quantity,
     batch_update_order,
+    batch_update_picked_order,
     register_stock,
     register_box_number,
     get_available_seasons,
     get_products_by_season,
     get_products_by_season_csv,
+    get_packing_pro_list,
+    get_packing_pro_lines,
 )
 
 
@@ -45,7 +53,7 @@ router = APIRouter()
 
 
 @router.get("/me", response_model=CustomerResponse, tags=["Customer"])
-async def get_current_customer(
+def get_current_customer(
     customer: Customer = Depends(verify_customer_api_key)
 ):
     """
@@ -57,7 +65,7 @@ async def get_current_customer(
 
 
 @router.get("/orders/b2b", response_model=OrdersListResponse, tags=["Orders"])
-async def list_b2b_orders(
+def list_b2b_orders(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Max records to return"),
     viewed: Optional[bool] = Query(None, description="Filter by view status: true=viewed, false=not viewed, null=all"),
@@ -103,7 +111,7 @@ async def list_b2b_orders(
 
 
 @router.get("/orders/b2c", response_model=OrdersListResponse, tags=["Orders"])
-async def list_b2c_orders(
+def list_b2c_orders(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Max records to return"),
     viewed: Optional[bool] = Query(None, description="Filter by view status: true=viewed, false=not viewed, null=all"),
@@ -153,7 +161,7 @@ async def list_b2c_orders(
     response_model=OrderLinesResponse,
     tags=["Orders"]
 )
-async def get_order_lines(
+def get_order_lines(
     order_id: int,
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Max records to return"),
@@ -200,7 +208,7 @@ async def get_order_lines(
     response_model=BatchUpdateOrderResponse,
     tags=["Orders"]
 )
-async def batch_update_order_endpoint(
+def batch_update_order_endpoint(
     request: BatchUpdateOrderRequest,
     customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
@@ -263,12 +271,35 @@ async def batch_update_order_endpoint(
 
 
 @router.put(
+    "/orders/{order_number}/batch-update",
+    tags=["Orders"]
+)
+def batch_update_picked_order_endpoint(
+    order_number: str,
+    request: PickedBatchUpdateRequest,
+    # customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    Update ALL lines of an order that is in **PICKED** status.
+    If XPO expedition succeeds, returns the PDF label as a direct download.
+    """
+    result = batch_update_picked_order(
+        order_number=order_number,
+        lines_updates=request.lines,
+        db=db
+    )
+
+    return result
+
+
+@router.put(
     "/orders/update",
     response_model=UpdateOrderResponse,
     tags=["Orders"],
     deprecated=True
 )
-async def update_order(
+def update_order(
     request: UpdateOrderRequest,
     customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
@@ -296,7 +327,7 @@ async def update_order(
     response_model=RegisterStockResponse,
     tags=["Stock"]
 )
-async def register_stock_movements(
+def register_stock_movements(
     request: RegisterStockRequest,
     customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
@@ -354,7 +385,7 @@ async def register_stock_movements(
         }
     }
 )
-async def register_box_number_endpoint(
+def register_box_number_endpoint(
     request: RegisterBoxNumberRequest,
     customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db)
@@ -401,8 +432,51 @@ async def register_box_number_endpoint(
     return register_box_number(request=request, db=db)
 
 
+@router.get("/packing-pro", response_model=PackingProListResponse, tags=["Packing Pro"])
+def list_packing_pro(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=500, description="Max records to return"),
+    viewed: Optional[bool] = Query(None, description="Filter by view status: true=viewed, false=not viewed, null=all"),
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    List packing_pro headers with pagination.
+
+    Returns all supplier merchandise reception records ordered by creation date (newest first).
+
+    **Filters:** Use `viewed` to filter by whether the customer has already seen each record.
+
+    **Authentication:** Requires X-Api-Key header
+    """
+    return get_packing_pro_list(customer, db, skip, limit, viewed)
+
+
+@router.get(
+    "/packing-pro/{company}/{packing_id}/lines",
+    response_model=PackingProLinesResponse,
+    tags=["Packing Pro"]
+)
+def get_packing_pro_lines_endpoint(
+    company: str,
+    packing_id: str,
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=500, description="Max records to return"),
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    Get lines for a specific packing_pro identified by company + packing_id.
+
+    Returns line detail including resolved SKU from the product catalogue.
+
+    **Authentication:** Requires X-Api-Key header
+    """
+    return get_packing_pro_lines(company, packing_id, db, skip, limit)
+
+
 @router.get("/health", tags=["Health"])
-async def health_check():
+def health_check():
     """
     Health check endpoint for B2B API Service.
     """

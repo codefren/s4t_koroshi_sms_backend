@@ -1,11 +1,15 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import sentry_sdk
 from src.adapters.secondary.database.config import engine, Base
+
+logger = logging.getLogger(__name__)
 
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN", ""),
@@ -33,6 +37,17 @@ from src.services.stock_reservation_cron_service import start_stock_reservation_
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
+
+    # Verificar conexión a la base de datos antes de arrancar
+    try:
+        with engine.connect() as conn:
+            conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+        logger.info("✅ Conexión a la base de datos verificada correctamente")
+    except Exception as e:
+        logger.critical(f"❌ No se pudo conectar a la base de datos: {e}")
+        logger.critical("   Revisa DB_SERVER, DB_NAME, DB_USER, DB_PASSWORD en el archivo .env")
+        raise RuntimeError(f"Database connection failed: {e}") from e
+
     stock_scheduler = start_stock_reservation_scheduler()
     yield
     stock_scheduler.shutdown()
@@ -78,6 +93,10 @@ app.include_router(stock_movement_router, prefix="/api/v1")
 app.include_router(ws_router)
 app.include_router(operator_ws_router, tags=["WebSocket PDA"])
 app.include_router(api_service_router, prefix="/api/service", tags=["B2B Service API"])
+
+MEDIA_DIR = os.path.join(os.path.dirname(__file__), "..", "media")
+os.makedirs(MEDIA_DIR, exist_ok=True)
+app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 
 class RootResponse(BaseModel):
     message: str

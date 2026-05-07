@@ -55,9 +55,9 @@ class OrderLoaderService:
             db_session: Sesión de base de datos (opcional, se crea una si no se provee)
         """
         self.csv_file_path = Path(csv_file_path)
-        self.db = db_session or SessionLocal()
-        self.owns_session = db_session is None
-        
+        # db_session se acepta para tests; en producción se crea en run()
+        self._external_session = db_session
+
         # Estadísticas de la carga
         self.stats = {
             'orders_processed': 0,
@@ -94,20 +94,24 @@ class OrderLoaderService:
         """
         self.stats['start_time'] = datetime.now()
         logger.info(f"🚀 Iniciando carga de órdenes desde: {self.csv_file_path}")
-        
+
+        # Abrir la sesión aquí (no en __init__) para garantizar que siempre se cierre
+        self.db = self._external_session or SessionLocal()
+        owns_session = self._external_session is None
+
         try:
             # 1. Validar archivo
             if not self._validate_csv_file():
                 return self._finalize_stats()
-            
+
             # 2. Leer CSV y agrupar por orden
             orders_data = self._read_and_group_csv()
             if not orders_data:
                 logger.warning("No se encontraron órdenes para procesar")
                 return self._finalize_stats()
-            
+
             logger.info(f"📦 Total de órdenes encontradas: {len(orders_data)}")
-            
+
             # 3. Procesar cada orden
             for numero_orden, order_data in orders_data.items():
                 try:
@@ -117,20 +121,20 @@ class OrderLoaderService:
                     logger.error(f"❌ Error procesando orden {numero_orden}: {e}")
                     self.stats['errors'] += 1
                     continue
-            
+
             # 4. Confirmar cambios
             self.db.commit()
             logger.info("✅ Transacción confirmada exitosamente")
-            
+
         except Exception as e:
             logger.error(f"❌ Error fatal durante la carga: {e}", exc_info=True)
             self.db.rollback()
             self.stats['errors'] += 1
-        
+
         finally:
-            if self.owns_session:
+            if owns_session:
                 self.db.close()
-        
+
         return self._finalize_stats()
     
     def _validate_csv_file(self) -> bool:

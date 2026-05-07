@@ -124,6 +124,22 @@ class BatchUpdateOrderRequest(BaseModel):
     lines: List[OrderLineUpdate] = Field(..., description="List of all order lines to update")
 
 
+class PickedBatchUpdateRequest(BaseModel):
+    """Request body for updating a PICKED order — order_number comes from the URL path"""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "lines": [
+                    {"sku": "SHOE-BLK-42-001", "quantity_served": 10, "box_code": "BOX-001"},
+                    {"sku": "SHOE-RED-38-002", "quantity_served": 0}
+                ]
+            }
+        }
+    )
+
+    lines: List[OrderLineUpdate] = Field(..., description="List of all order lines to update")
+
+
 class BatchUpdateOrderResponse(BaseModel):
     """Response after batch update"""
     status: str
@@ -257,3 +273,57 @@ class ProductsBySeasonResponse(BaseModel):
     limit: int = Field(..., description="Max records per page used")
     only_active: bool = Field(..., description="Whether inactive products were excluded")
     products: list[ProductBySeasonItem] = Field(..., description="List of products")
+# ============================================================================
+# PACKING PRO SCHEMAS
+# ============================================================================
+
+class PackingProListItem(BaseModel):
+    """Minimal packing_pro header info for listing"""
+    id: int
+    company: str
+    packing_id: str
+    pack_qty: int
+    packages: int
+    document: str
+    arrival_date: Optional[str] = None
+    container: str
+    container_type: str
+    status_id: int
+    customer_viewed_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PackingProListResponse(BaseModel):
+    """Paginated response for packing_pro list"""
+    total_count: int
+    skip: int
+    limit: int
+    packings: List[PackingProListItem]
+
+
+class PackingProLineItem(BaseModel):
+    """Single packing_pro line with SKU resolved from product_reference"""
+    id: int
+    line_id: str
+    box_no: int
+    sku: Optional[str] = None
+    quantity: float
+    po_company: Optional[str] = None
+    po_id: Optional[str] = None
+    po_order_id: Optional[str] = None
+    po_line_id: Optional[str] = None
+    pack_id: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PackingProLinesResponse(BaseModel):
+    """Response for packing_pro lines endpoint"""
+    company: str
+    packing_id: str
+    total_count: int
+    skip: int
+    limit: int
+    lines: List[PackingProLineItem]

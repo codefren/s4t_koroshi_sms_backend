@@ -11,14 +11,39 @@ import json
 import os
 import logging
 
+from src.api_service.xpo_service import XpoExpedicionParams, send_xpo_expedicion
+
+XPO_LABELS_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "..", "media", "xpo", "labels"
+)
+
+
+def _download_xpo_pdf(consignment_id: str, pdf_url: str) -> Optional[str]:
+    """Downloads the XPO label PDF and returns its relative path for /media serving."""
+    try:
+        os.makedirs(XPO_LABELS_DIR, exist_ok=True)
+        filename  = f"{consignment_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        full_path = os.path.join(XPO_LABELS_DIR, filename)
+        r = requests.get(pdf_url, timeout=30)
+        r.raise_for_status()
+        with open(full_path, "wb") as f:
+            f.write(r.content)
+        return f"xpo/labels/{filename}"   # relativa a /media
+    except Exception as exc:
+        logger.error(f"Error descargando PDF XPO: {exc}")
+        return None
+from src.api_service.erp_service import get_packing_info
+
 from src.adapters.secondary.database.orm import (
-    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen
+    Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen,
+    PackingPro, PackingProLine, XpoExpedicion
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
     OrderListItem, OrderLineSimple, OrderLinesResponse, UpdateOrderResponse,
     OrdersListResponse, OrderLineUpdate, BatchUpdateOrderResponse, RegisterStockRequest, RegisterStockResponse,
-    RegisterBoxNumberRequest, RegisterBoxNumberResponse
+    RegisterBoxNumberRequest, RegisterBoxNumberResponse,
+    PackingProListItem, PackingProListResponse, PackingProLineItem, PackingProLinesResponse
 )
 
 # Logger configuration
@@ -708,7 +733,7 @@ def batch_update_order(
                 "Content-Type": "application/json",
                 "X-API-Key": EXTERNAL_API_KEY
             },
-            timeout=120
+            timeout=None
         )
         
         # 8.6 Log response from external API
@@ -766,6 +791,208 @@ def batch_update_order(
         logger.error(f"Network error: {error_msg}")
         return {"status": False, "error": error_msg}
 
+
+
+def batch_update_picked_order(
+    order_number: str,
+    lines_updates: List[OrderLineUpdate],
+    db: Session
+) -> BatchUpdateOrderResponse:
+    """
+    Register a PICKED order against the external Packing API.
+
+    Does NOT modify any order lines. Only:
+    1. Validates order is in PICKED status
+    2. Sends lines to external Packing API
+    3. If external API returns success → marks order as READY + sets fecha_fin_picking
+    4. If external API fails → rolls back and returns error (no DB changes)
+
+    Raises:
+        HTTPException 404: Order not found
+        HTTPException 400: Order is not in PICKED status or already completed
+    """
+    # 1. Find order
+    order = db.query(Order).filter(Order.numero_orden == order_number).first()
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order {order_number} not found")
+
+    # 2. Validate PICKED status
+    order_status = db.query(OrderStatus).filter(OrderStatus.id == order.status_id).first()
+    current_status = order_status.codigo if order_status else "unknown"
+
+    if current_status != 'PICKED':
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order {order_number} must be in PICKED status. Current status: {current_status}"
+        )
+
+    # # 3. Verify warehouse access
+    # if order.almacen_id:
+    #     verify_warehouse_access(customer, order.almacen_id, db)
+
+    # 5. Build external API payload from incoming lines
+    external_lines = []
+    for line in lines_updates:
+        if line.quantity_served > 0:
+            external_lines.append({
+                "sku": line.sku,
+                "matricula": line.box_code or "",
+                "cantidad": line.quantity_served
+            })
+
+    external_payload = {
+        "empresaId": "0001",
+        "almacenId": order.almacen.codigo if order.almacen else "00000001",
+        "clienteId": order.cliente,
+        "ordenServicioId": order.numero_orden,
+        "pedidoId": order.numero_pedido,
+        "pedidoEmpresa": "0001",
+        "operarioId": "000001",
+        "generarTraspaso": True,
+        "tipoOperacionStockTraspaso": 5,
+        "lineas": external_lines
+    }
+
+    # 6. Send to external Packing API
+    try:
+        logger.info(f"Sending PICKED order {order_number} to external Packing API")
+        logger.info(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
+
+        response = requests.post(
+            "http://localhost:5053/api/Packing",
+            json=external_payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-API-Key": EXTERNAL_API_KEY
+            },
+            timeout=None
+        )
+
+        logger.info(f"External API response - Status: {response.status_code}, Body: {response.text}")
+
+        try:
+            external_api_response = response.json()
+        except json.JSONDecodeError:
+            external_api_response = {"raw_response": response.text}
+
+        # 7. Check success
+        api_success = (
+            response.status_code == 201
+            and isinstance(external_api_response, dict)
+            and external_api_response.get('success', False)
+        )
+
+        if not api_success:
+            error_message = "Unknown error from external API"
+            if isinstance(external_api_response, dict):
+                error_message = external_api_response.get('error', external_api_response.get('message', str(external_api_response)))
+
+            logger.error(f"External API failed for order {order_number}: {error_message}")
+            return BatchUpdateOrderResponse(
+                status="error",
+                message=f"External API error: {error_message}",
+                order_number=order_number,
+                order_status=current_status,
+                lines_updated=0,
+                lines_completed=0,
+                lines_partial=0,
+                lines_pending=len(lines_updates),
+                external_api_data=external_api_response
+            )
+
+        # 8. External API succeeded → update order status only
+        ready_status = db.query(OrderStatus).filter(OrderStatus.codigo == 'READY').first()
+        if ready_status:
+            order.status_id = ready_status.id
+
+        db.commit()
+        logger.info(f"Order {order_number} marked as READY after successful external API response")
+
+        # 9. Send expedition to XPO
+        fecha_now = datetime.now()
+        total_cajas    = len({l.box_code for l in lines_updates if l.box_code})
+        total_unidades = sum(l.quantity_served for l in lines_updates if l.quantity_served > 0)
+        logger.info(f"total_cajas={total_cajas}, total_unidades={total_unidades}")
+
+        erp = get_packing_info(order.numero_orden, num_cajas=total_cajas if total_cajas > 0 else 1)
+
+        xpo_params = XpoExpedicionParams(
+            dest_nombre    = (erp.nombre    if erp else None) or order.nombre_cliente or "",
+            dest_direccion = (erp.direccion if erp else None) or "",
+            dest_cp        = (erp.cp        if erp else None) or "",
+            dest_localidad = (erp.poblacion if erp else None) or "",
+            dest_provincia = (erp.provincia if erp else None) or "",
+            dest_pais      = (erp.pais      if erp else None) or "ES",
+            dest_movil     = (erp.telefono  if erp else None) or "",
+            dest_email     = (erp.email     if erp else None) or "",
+            dest_cod_tienda= (erp.cod_tienda if erp else None) or "",
+            obs_linea1        = f"{order.nombre_cliente or ''} / PACKING / {order.numero_orden}",
+            referencia        = f"{order.numero_pedido or ''} - {fecha_now.strftime('%Y%m%d')}",
+            fecha_expedicion  = fecha_now,
+            total_cajas    = total_cajas if total_cajas > 0 else 1,
+            tipo_caja      = "5",
+            total_unidades = total_unidades,
+            peso_neto      = erp.peso_neto    if erp else 0.0,
+            peso_bruto     = erp.peso_bruto   if erp else 0.0,
+            volumen_neto   = erp.volumen      if erp else 0.0,
+            volumen_bruto  = erp.volumen      if erp else 0.0,
+            nro_pedido_ventas = order.numero_pedido or "",
+            nro_su_pedido     = (erp.ped_cli if erp else None) or "",
+        )
+
+        xpo_result = send_xpo_expedicion(xpo_params)
+
+        pdf_path = None
+        if xpo_result["success"]:
+            consignment_id = xpo_result.get("consignment_id", "")
+            pdf_url        = xpo_result.get("pdf_url", "")
+            logger.info(f"XPO expedition registered — consignment_id: {consignment_id}")
+
+            pdf_path = _download_xpo_pdf(consignment_id, pdf_url) if pdf_url else None
+
+            db.add(XpoExpedicion(
+                order_id         = order.id,
+                numero_orden     = order_number,
+                consignment_id   = consignment_id,
+                referencia       = xpo_params.referencia,
+                pdf_url          = pdf_url,
+                pdf_path         = pdf_path,
+                fecha_expedicion = fecha_now,
+            ))
+            db.commit()
+        else:
+            logger.error(f"XPO expedition failed: {xpo_result.get('error')} — raw: {xpo_result.get('raw_response')}")
+
+        return BatchUpdateOrderResponse(
+            status="ok" if xpo_result["success"] else "error",
+            message=f"Expedición XPO registrada para la orden {order_number}" if xpo_result["success"] else xpo_result.get("error", "XPO error"),
+            order_number=order_number,
+            order_status=current_status,
+            lines_updated=0,
+            lines_completed=0,
+            lines_partial=0,
+            lines_pending=len(lines_updates),
+            external_api_data={
+                "consignment_id": xpo_result.get("consignment_id"),
+                "pdf_url":        xpo_result.get("pdf_url"),
+                "pdf_path":       pdf_path,
+            }
+        )
+
+    except requests.exceptions.RequestException as e:
+        error_msg = f"Error connecting to external Packing API: {str(e)}"
+        logger.error(error_msg)
+        return BatchUpdateOrderResponse(
+            status="error",
+            message=error_msg,
+            order_number=order_number,
+            order_status=current_status,
+            lines_updated=0,
+            lines_completed=0,
+            lines_partial=0,
+            lines_pending=len(lines_updates),
+            external_api_data=None
+        )
 
 
 def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockResponse:
@@ -826,7 +1053,7 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
                 "Content-Type": "application/json",
                 "X-API-Key": EXTERNAL_API_KEY
             },
-            timeout=120
+            timeout=None
         )
         
         # Step 4: Log response from external API
@@ -1127,3 +1354,120 @@ def get_products_by_season(
         "only_active": only_active,
         "products": products,
     }
+# ============================================================================
+# PACKING PRO
+# ============================================================================
+
+def get_packing_pro_list(
+    customer: Customer,
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    viewed: Optional[bool] = None
+) -> PackingProListResponse:
+    """
+    Get paginated list of packing_pro headers.
+    Updates customer_viewed_at on first view.
+
+    Args:
+        customer: Authenticated customer
+        db: Database session
+        skip: Pagination offset
+        limit: Max results to return
+        viewed: Filter by view status (True=viewed, False=not viewed, None=all)
+
+    Returns:
+        PackingProListResponse with pagination metadata
+    """
+    base_query = db.query(PackingPro)
+
+    if viewed is not None:
+        if viewed:
+            base_query = base_query.filter(PackingPro.customer_viewed_at.isnot(None))
+        else:
+            base_query = base_query.filter(PackingPro.customer_viewed_at.is_(None))
+
+    total_count = base_query.count()
+    packings = base_query.order_by(PackingPro.created_at.desc()).offset(skip).limit(limit).all()
+
+    # Mark as viewed on first access
+    now = datetime.now(timezone.utc)
+    for packing in packings:
+        if packing.customer_viewed_at is None:
+            packing.customer_viewed_at = now
+    db.commit()
+
+    return PackingProListResponse(
+        total_count=total_count,
+        skip=skip,
+        limit=limit,
+        packings=packings
+    )
+
+
+def get_packing_pro_lines(
+    company: str,
+    packing_id: str,
+    db: Session,
+    skip: int = 0,
+    limit: int = 100
+) -> PackingProLinesResponse:
+    """
+    Get lines for a specific packing_pro identified by (company, packing_id).
+
+    Args:
+        company: Company code
+        packing_id: Packing identifier
+        db: Database session
+        skip: Pagination offset
+        limit: Max results to return
+
+    Returns:
+        PackingProLinesResponse with lines detail
+
+    Raises:
+        HTTPException 404: If packing not found
+    """
+    packing = db.query(PackingPro).filter(
+        PackingPro.company == company,
+        PackingPro.packing_id == packing_id
+    ).first()
+
+    if not packing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Packing '{packing_id}' not found for company '{company}'"
+        )
+
+    base_query = db.query(PackingProLine).filter(
+        PackingProLine.company == company,
+        PackingProLine.packing_id == packing_id
+    )
+
+    total_count = base_query.count()
+    lines = base_query.order_by(PackingProLine.line_id).offset(skip).limit(limit).all()
+
+    lines_out = [
+        PackingProLineItem(
+            id=line.id,
+            line_id=line.line_id,
+            box_no=line.box_no,
+            sku=line.product.sku if line.product else None,
+            quantity=line.quantity,
+            po_company=line.po_company,
+            po_id=line.po_id,
+            po_order_id=line.po_order_id,
+            po_line_id=line.po_line_id,
+            pack_id=line.pack_id
+        )
+        for line in lines
+    ]
+
+    return PackingProLinesResponse(
+        company=company,
+        packing_id=packing_id,
+        total_count=total_count,
+        skip=skip,
+        limit=limit,
+        lines=lines_out
+    )
