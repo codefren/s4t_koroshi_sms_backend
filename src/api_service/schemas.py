@@ -257,6 +257,7 @@ class ProductBySeasonItem(BaseModel):
     posicion_talla: Optional[int] = Field(None, description="Size sort position")
     temporada: Optional[str] = Field(None, description="Product season")
     activo: bool = Field(..., description="Whether the product is active in catalog")
+    eans: list[str] = Field(default_factory=list, description="EAN barcodes associated to this product")
 
 
 class SeasonsListResponse(BaseModel):

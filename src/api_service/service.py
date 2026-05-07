@@ -1,7 +1,7 @@
 """
 Business logic for B2B API Service operations.
 """
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from fastapi import HTTPException
 from typing import List, Optional
@@ -36,7 +36,7 @@ from src.api_service.erp_service import get_packing_info
 
 from src.adapters.secondary.database.orm import (
     Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen,
-    PackingPro, PackingProLine, XpoExpedicion
+    PackingPro, PackingProLine, XpoExpedicion, EAN
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
@@ -1269,9 +1269,11 @@ def get_products_by_season_csv(
 ) -> list:
     """
     Return ALL products for a season (no pagination) ready for CSV export.
+    Eagerly loads EANs to avoid N+1 queries.
     """
     query = (
         db.query(ProductReference)
+        .options(joinedload(ProductReference.eans))
         .filter(
             func.lower(ProductReference.temporada) == temporada.strip().lower()
         )
@@ -1319,30 +1321,40 @@ def get_products_by_season(
     Raises:
         HTTPException 404 if no products found for the given season.
     """
-    query = (
+    # Count query (without joinedload to keep it fast)
+    count_query = (
         db.query(ProductReference)
         .filter(
             func.lower(ProductReference.temporada) == temporada.strip().lower()
         )
     )
-
     if only_active:
-        query = query.filter(ProductReference.activo.is_(True))
+        count_query = count_query.filter(ProductReference.activo.is_(True))
 
-    # Stable ordering: by product name, then size position, then reference
-    query = query.order_by(
-        ProductReference.nombre_producto,
-        ProductReference.posicion_talla,
-        ProductReference.referencia,
-    )
-
-    total_count = query.count()
+    total_count = count_query.count()
 
     if total_count == 0:
         raise HTTPException(
             status_code=404,
             detail=f"No products found for season '{temporada}'"
         )
+
+    # Data query with eager-loaded EANs
+    query = (
+        db.query(ProductReference)
+        .options(joinedload(ProductReference.eans))
+        .filter(
+            func.lower(ProductReference.temporada) == temporada.strip().lower()
+        )
+    )
+    if only_active:
+        query = query.filter(ProductReference.activo.is_(True))
+
+    query = query.order_by(
+        ProductReference.nombre_producto,
+        ProductReference.posicion_talla,
+        ProductReference.referencia,
+    )
 
     products = query.offset(skip).limit(limit).all()
 

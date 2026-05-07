@@ -141,7 +141,7 @@ class TestCsvOutput:
     EXPECTED_HEADERS = [
         "id", "referencia", "sku", "nombre_producto",
         "color_id", "nombre_color", "talla", "posicion_talla",
-        "temporada", "activo",
+        "temporada", "activo", "eans",
     ]
 
     def _build_csv(self, rows: list[dict]) -> list[list[str]]:
@@ -150,6 +150,8 @@ class TestCsvOutput:
         writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
         writer.writerow(self.EXPECTED_HEADERS)
         for r in rows:
+            eans_list = r.get("eans") or []
+            eans_str = ",".join(eans_list) if eans_list else ""
             writer.writerow([
                 r.get("id", ""),
                 r.get("referencia", ""),
@@ -161,6 +163,7 @@ class TestCsvOutput:
                 r.get("posicion_talla") if r.get("posicion_talla") is not None else "",
                 r.get("temporada") or "",
                 r.get("activo", ""),
+                eans_str,
             ])
         output.seek(0)
         return list(csv.reader(output))
@@ -214,3 +217,36 @@ class TestCsvOutput:
         safe = temporada.strip().replace(" ", "_")
         filename = f"productos_{safe}.csv"
         assert filename == "productos_Verano_2025.csv"
+
+    def test_single_ean_in_column(self):
+        rows = [{
+            "id": 1, "referencia": "A1B2C3", "sku": "KOR-001",
+            "nombre_producto": "Camiseta", "color_id": "01",
+            "nombre_color": "Blanco", "talla": "M", "posicion_talla": 3,
+            "temporada": "V25", "activo": True,
+            "eans": ["1234567890123"],
+        }]
+        parsed = self._build_csv(rows)
+        assert parsed[1][10] == "1234567890123"  # eans column (index 10)
+
+    def test_multiple_eans_joined_with_comma(self):
+        rows = [{
+            "id": 2, "referencia": "B2C3D4", "sku": None,
+            "nombre_producto": "Pantalon", "color_id": "02",
+            "nombre_color": None, "talla": "L", "posicion_talla": 4,
+            "temporada": "I16", "activo": True,
+            "eans": ["1111111111111", "2222222222222", "3333333333333"],
+        }]
+        parsed = self._build_csv(rows)
+        assert parsed[1][10] == "1111111111111,2222222222222,3333333333333"
+
+    def test_no_eans_gives_empty_string(self):
+        rows = [{
+            "id": 3, "referencia": "C3D4E5", "sku": None,
+            "nombre_producto": "Zapato", "color_id": "03",
+            "nombre_color": None, "talla": "42", "posicion_talla": 5,
+            "temporada": "V25", "activo": True,
+            "eans": [],
+        }]
+        parsed = self._build_csv(rows)
+        assert parsed[1][10] == ""

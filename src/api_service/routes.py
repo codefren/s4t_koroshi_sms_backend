@@ -690,11 +690,12 @@ async def download_products_by_season_csv(
     writer.writerow([
         "id", "referencia", "sku", "nombre_producto",
         "color_id", "nombre_color", "talla", "posicion_talla",
-        "temporada", "activo",
+        "temporada", "activo", "eans",
     ])
 
     # Data rows
     for p in products:
+        eans_str = ",".join(e.ean for e in p.eans) if p.eans else ""
         writer.writerow([
             p.id,
             p.referencia,
@@ -706,6 +707,7 @@ async def download_products_by_season_csv(
             p.posicion_talla if p.posicion_talla is not None else "",
             p.temporada or "",
             p.activo,
+            eans_str,
         ])
 
     output.seek(0)
