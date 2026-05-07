@@ -223,3 +223,37 @@ class RegisterBoxNumberResponse(BaseModel):
     status: str = Field(..., description="Success or error")
     message: str = Field(..., description="Descriptive message")
     box_number: str = Field(..., description="Box number registered")
+
+
+# ─── Products by Season ───────────────────────────────────────────────────────
+
+class ProductBySeasonItem(BaseModel):
+    """Single product item in a season response"""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="Internal product ID")
+    referencia: str = Field(..., description="Unique product reference (hex code)")
+    sku: Optional[str] = Field(None, description="SKU or internal article code")
+    nombre_producto: str = Field(..., description="Product name")
+    color_id: str = Field(..., description="Color ID in catalog")
+    nombre_color: Optional[str] = Field(None, description="Color descriptive name")
+    talla: str = Field(..., description="Size (XS, S, M, L, XL, 38, 40...)")
+    posicion_talla: Optional[int] = Field(None, description="Size sort position")
+    temporada: Optional[str] = Field(None, description="Product season")
+    activo: bool = Field(..., description="Whether the product is active in catalog")
+
+
+class SeasonsListResponse(BaseModel):
+    """List of available seasons"""
+    seasons: list[str] = Field(..., description="List of available season names")
+    total: int = Field(..., description="Total number of seasons")
+
+
+class ProductsBySeasonResponse(BaseModel):
+    """Paginated list of products for a given season"""
+    temporada: str = Field(..., description="Season name queried")
+    total_count: int = Field(..., description="Total products in this season")
+    skip: int = Field(..., description="Pagination offset used")
+    limit: int = Field(..., description="Max records per page used")
+    only_active: bool = Field(..., description="Whether inactive products were excluded")
+    products: list[ProductBySeasonItem] = Field(..., description="List of products")

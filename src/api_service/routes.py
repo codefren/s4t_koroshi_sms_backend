@@ -20,7 +20,9 @@ from src.api_service.schemas import (
     RegisterStockRequest,
     RegisterStockResponse,
     RegisterBoxNumberRequest,
-    RegisterBoxNumberResponse
+    RegisterBoxNumberResponse,
+    SeasonsListResponse,
+    ProductsBySeasonResponse,
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
@@ -29,7 +31,9 @@ from src.api_service.service import (
     update_order_quantity,
     batch_update_order,
     register_stock,
-    register_box_number
+    register_box_number,
+    get_available_seasons,
+    get_products_by_season,
 )
 
 
@@ -403,3 +407,131 @@ async def health_check():
         "service": "B2B Customer API",
         "version": "1.0.0"
     }
+
+
+# ─── Products by Season ─────────────────────────────────────────────────────
+
+@router.get(
+    "/products/seasons",
+    response_model=SeasonsListResponse,
+    tags=["Products"],
+    summary="List available seasons",
+)
+async def list_seasons(
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns the list of distinct season names available in the product catalog.
+
+    Use this endpoint to discover valid season values before calling
+    `/products/by-season/{temporada}`.
+
+    **Authentication:** Requires `X-Api-Key` header.
+
+    **Example:**
+    ```
+    curl -H "X-Api-Key: cust_live_abc123..." \\
+         http://localhost:8000/api/service/products/seasons
+    ```
+
+    **Response:**
+    ```json
+    {
+        "seasons": ["Invierno 2024", "Primavera 2025", "Verano 2025"],
+        "total": 3
+    }
+    ```
+    """
+    seasons = get_available_seasons(db)
+    return SeasonsListResponse(seasons=seasons, total=len(seasons))
+
+
+@router.get(
+    "/products/by-season/{temporada}",
+    response_model=ProductsBySeasonResponse,
+    tags=["Products"],
+    summary="Download products by season",
+    responses={
+        404: {
+            "description": "No products found for the given season",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "No products found for season 'Verano 2025'"}
+                }
+            },
+        }
+    },
+)
+async def get_products_by_season_endpoint(
+    temporada: str,
+    skip: int = Query(0, ge=0, description="Number of records to skip (pagination)"),
+    limit: int = Query(100, ge=1, le=500, description="Max records to return per page"),
+    only_active: bool = Query(True, description="Exclude inactive products from catalog"),
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db),
+):
+    """
+    Download the full product catalog for a specific season.
+
+    Returns all products whose `temporada` field matches the given value
+    (case-insensitive). Supports pagination and active-only filtering.
+
+    **Path parameter:**
+    - `temporada`: Season name, e.g. `Verano 2025` or `Invierno 2024`.
+      Use `/products/seasons` to list valid values.
+
+    **Query parameters:**
+    | Param | Default | Description |
+    |---|---|---|
+    | `skip` | 0 | Pagination offset |
+    | `limit` | 100 | Max records (1–500) |
+    | `only_active` | true | Exclude inactive products |
+
+    **Authentication:** Requires `X-Api-Key` header.
+
+    **Example — first page:**
+    ```
+    curl -H "X-Api-Key: cust_live_abc123..." \\
+         "http://localhost:8000/api/service/products/by-season/Verano%202025?skip=0&limit=100"
+    ```
+
+    **Example — include inactive:**
+    ```
+    curl -H "X-Api-Key: cust_live_abc123..." \\
+         "http://localhost:8000/api/service/products/by-season/Verano%202025?only_active=false"
+    ```
+
+    **Response:**
+    ```json
+    {
+        "temporada": "Verano 2025",
+        "total_count": 342,
+        "skip": 0,
+        "limit": 100,
+        "only_active": true,
+        "products": [
+            {
+                "id": 1,
+                "referencia": "A1B2C3",
+                "sku": "KOR-A1B2C3",
+                "nombre_producto": "Camisa Polo Manga Corta",
+                "color_id": "000001",
+                "nombre_color": "Rojo",
+                "talla": "M",
+                "posicion_talla": 3,
+                "temporada": "Verano 2025",
+                "activo": true
+            }
+        ]
+    }
+    ```
+    """
+    result = get_products_by_season(
+        temporada=temporada,
+        db=db,
+        skip=skip,
+        limit=limit,
+        only_active=only_active,
+    )
+    return ProductsBySeasonResponse(**result)

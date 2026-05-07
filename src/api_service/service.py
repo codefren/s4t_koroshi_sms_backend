@@ -972,3 +972,80 @@ def register_box_number(request: RegisterBoxNumberRequest, db: Session) -> Regis
         message=f"Box number '{request.box_number}' registered successfully",
         box_number=new_record.box_number
     )
+
+
+# ─── Products by Season ───────────────────────────────────────────────────────
+
+def get_available_seasons(db: Session) -> list[str]:
+    """
+    Return a sorted list of distinct non-null season values in product_references.
+    """
+    rows = (
+        db.query(ProductReference.temporada)
+        .filter(ProductReference.temporada.isnot(None))
+        .filter(ProductReference.temporada != "")
+        .distinct()
+        .order_by(ProductReference.temporada)
+        .all()
+    )
+    return [r.temporada for r in rows]
+
+
+def get_products_by_season(
+    temporada: str,
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    only_active: bool = True,
+) -> dict:
+    """
+    Return paginated products filtered by season.
+
+    Args:
+        temporada:   Season name to filter by (exact match, case-insensitive).
+        db:          SQLAlchemy session.
+        skip:        Pagination offset.
+        limit:       Max results to return.
+        only_active: When True, excludes products with activo=False.
+
+    Returns:
+        Dict with total_count, skip, limit, only_active and products list.
+
+    Raises:
+        HTTPException 404 if no products found for the given season.
+    """
+    query = (
+        db.query(ProductReference)
+        .filter(
+            func.lower(ProductReference.temporada) == temporada.strip().lower()
+        )
+    )
+
+    if only_active:
+        query = query.filter(ProductReference.activo.is_(True))
+
+    # Stable ordering: by product name, then size position, then reference
+    query = query.order_by(
+        ProductReference.nombre_producto,
+        ProductReference.posicion_talla,
+        ProductReference.referencia,
+    )
+
+    total_count = query.count()
+
+    if total_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No products found for season '{temporada}'"
+        )
+
+    products = query.offset(skip).limit(limit).all()
+
+    return {
+        "temporada": temporada.strip(),
+        "total_count": total_count,
+        "skip": skip,
+        "limit": limit,
+        "only_active": only_active,
+        "products": products,
+    }
