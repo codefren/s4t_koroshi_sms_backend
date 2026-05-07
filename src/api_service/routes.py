@@ -1,7 +1,10 @@
 """
 FastAPI routes for B2B Customer API Service.
 """
+import csv
+import io
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
@@ -23,8 +26,11 @@ from src.api_service.schemas import (
     RegisterStockResponse,
     RegisterBoxNumberRequest,
     RegisterBoxNumberResponse,
+    SeasonsListResponse,
+    ProductsBySeasonResponse,
     PackingProListResponse,
     PackingProLinesResponse,
+
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
@@ -35,6 +41,9 @@ from src.api_service.service import (
     batch_update_picked_order,
     register_stock,
     register_box_number,
+    get_available_seasons,
+    get_products_by_season,
+    get_products_by_season_csv,
     get_packing_pro_list,
     get_packing_pro_lines,
 )
@@ -77,7 +86,7 @@ def list_b2b_orders(
     
     **Example:**
     ```
-    curl -H "X-Api-Key: cust_live_abc123..." \
+    curl -H "X-Api-Key: YOUR_API_KEY" \
          "http://localhost:8000/api/service/orders/b2b?skip=0&limit=50"
     ```
     
@@ -123,7 +132,7 @@ def list_b2c_orders(
     
     **Example:**
     ```
-    curl -H "X-Api-Key: cust_live_abc123..." \
+    curl -H "X-Api-Key: YOUR_API_KEY" \
          "http://localhost:8000/api/service/orders/b2c?skip=0&limit=50"
     ```
     
@@ -172,7 +181,7 @@ def get_order_lines(
     
     **Example:**
     ```
-    curl -H "X-Api-Key: cust_live_abc123..." \
+    curl -H "X-Api-Key: YOUR_API_KEY" \
          "http://localhost:8000/api/service/orders/123/lines?skip=0&limit=50"
     ```
     
@@ -226,7 +235,7 @@ def batch_update_order_endpoint(
     
     **Example:**
     ```
-    curl -X PUT -H "X-Api-Key: cust_live_abc123..." \
+    curl -X PUT -H "X-Api-Key: YOUR_API_KEY" \
          -H "Content-Type: application/json" \
          -d '{
            "order_number": "ORD-12345",
@@ -476,3 +485,238 @@ def health_check():
         "service": "B2B Customer API",
         "version": "1.0.0"
     }
+
+
+# ─── Products by Season ─────────────────────────────────────────────────────
+
+@router.get(
+    "/products/seasons",
+    response_model=SeasonsListResponse,
+    tags=["Products"],
+    summary="List available seasons",
+)
+async def list_seasons(
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns the list of distinct season names available in the product catalog.
+
+    Use this endpoint to discover valid season values before calling
+    `/products/by-season/{temporada}`.
+
+    **Authentication:** Requires `X-Api-Key` header.
+
+    **Example:**
+    ```
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
+         http://localhost:8000/api/service/products/seasons
+    ```
+
+    **Response:**
+    ```json
+    {
+        "seasons": ["Invierno 2024", "Primavera 2025", "Verano 2025"],
+        "total": 3
+    }
+    ```
+    """
+    seasons = get_available_seasons(db)
+    return SeasonsListResponse(seasons=seasons, total=len(seasons))
+
+
+@router.get(
+    "/products/by-season/{temporada}",
+    response_model=ProductsBySeasonResponse,
+    tags=["Products"],
+    summary="Download products by season",
+    responses={
+        404: {
+            "description": "No products found for the given season",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "No products found for season 'Verano 2025'"}
+                }
+            },
+        }
+    },
+)
+async def get_products_by_season_endpoint(
+    temporada: str,
+    skip: int = Query(0, ge=0, description="Number of records to skip (pagination)"),
+    limit: int = Query(100, ge=1, le=500, description="Max records to return per page"),
+    only_active: bool = Query(True, description="Exclude inactive products from catalog"),
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db),
+):
+    """
+    Download the full product catalog for a specific season.
+
+    Returns all products whose `temporada` field matches the given value
+    (case-insensitive). Supports pagination and active-only filtering.
+
+    **Path parameter:**
+    - `temporada`: Season name, e.g. `Verano 2025` or `Invierno 2024`.
+      Use `/products/seasons` to list valid values.
+
+    **Query parameters:**
+    | Param | Default | Description |
+    |---|---|---|
+    | `skip` | 0 | Pagination offset |
+    | `limit` | 100 | Max records (1–500) |
+    | `only_active` | true | Exclude inactive products |
+
+    **Authentication:** Requires `X-Api-Key` header.
+
+    **Example — first page:**
+    ```
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
+         "http://localhost:8000/api/service/products/by-season/Verano%202025?skip=0&limit=100"
+    ```
+
+    **Example — include inactive:**
+    ```
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
+         "http://localhost:8000/api/service/products/by-season/Verano%202025?only_active=false"
+    ```
+
+    **Response:**
+    ```json
+    {
+        "temporada": "Verano 2025",
+        "total_count": 342,
+        "skip": 0,
+        "limit": 100,
+        "only_active": true,
+        "products": [
+            {
+                "id": 1,
+                "referencia": "A1B2C3",
+                "sku": "KOR-A1B2C3",
+                "nombre_producto": "Camisa Polo Manga Corta",
+                "color_id": "000001",
+                "nombre_color": "Rojo",
+                "talla": "M",
+                "posicion_talla": 3,
+                "temporada": "Verano 2025",
+                "activo": true
+            }
+        ]
+    }
+    ```
+    """
+    result = get_products_by_season(
+        temporada=temporada,
+        db=db,
+        skip=skip,
+        limit=limit,
+        only_active=only_active,
+    )
+    return ProductsBySeasonResponse(**result)
+
+
+@router.get(
+    "/products/by-season/{temporada}/csv",
+    tags=["Products"],
+    summary="Download products by season as CSV",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "CSV file download",
+            "content": {"text/csv": {}},
+        },
+        404: {
+            "description": "No products found for the given season",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "No products found for season 'V99'"}
+                }
+            },
+        },
+    },
+)
+async def download_products_by_season_csv(
+    temporada: str,
+    only_active: bool = Query(True, description="Exclude inactive products from catalog"),
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db),
+):
+    """
+    Download the full product catalog for a season as a **CSV file**.
+
+    Returns all matching products in a single file — no pagination needed.
+    The response triggers a browser file download with a descriptive filename.
+
+    **CSV columns:**
+    `id`, `referencia`, `sku`, `nombre_producto`, `color_id`, `nombre_color`,
+    `talla`, `posicion_talla`, `temporada`, `activo`
+
+    **Path parameter:**
+    - `temporada`: Season code, e.g. `V25` or `I16`.
+      Use `/products/seasons` to list valid values.
+
+    **Query parameters:**
+    | Param | Default | Description |
+    |---|---|---|
+    | `only_active` | true | Exclude inactive products |
+
+    **Authentication:** Requires `X-Api-Key` header.
+
+    **Example:**
+    ```
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
+         "http://localhost:8000/api/service/products/by-season/V25/csv" \\
+         --output productos_V25.csv
+    ```
+
+    **CSV output sample:**
+    ```
+    id,referencia,sku,nombre_producto,color_id,nombre_color,talla,posicion_talla,temporada,activo
+    1,A1B2C3,KOR-A1B2C3,Camisa Polo Manga Corta,000001,Rojo,M,3,V25,True
+    2,D4E5F6,KOR-D4E5F6,Pantalon Slim Fit,000002,Azul,L,4,V25,True
+    ```
+    """
+    products = get_products_by_season_csv(
+        temporada=temporada,
+        db=db,
+        only_active=only_active,
+    )
+
+    # Build CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+
+    # Header row
+    writer.writerow([
+        "id", "referencia", "sku", "nombre_producto",
+        "color_id", "nombre_color", "talla", "posicion_talla",
+        "temporada", "activo",
+    ])
+
+    # Data rows
+    for p in products:
+        writer.writerow([
+            p.id,
+            p.referencia,
+            p.sku or "",
+            p.nombre_producto,
+            p.color_id,
+            p.nombre_color or "",
+            p.talla,
+            p.posicion_talla if p.posicion_talla is not None else "",
+            p.temporada or "",
+            p.activo,
+        ])
+
+    output.seek(0)
+    safe_season = temporada.strip().replace(" ", "_")
+    filename = f"productos_{safe_season}.csv"
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Total-Count": str(len(products)),
+        },
+    )

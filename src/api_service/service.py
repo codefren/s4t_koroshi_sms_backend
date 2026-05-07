@@ -1201,6 +1201,159 @@ def register_box_number(request: RegisterBoxNumberRequest, db: Session) -> Regis
     )
 
 
+# ─── Products by Season ───────────────────────────────────────────────────────
+
+import re as _re
+
+
+def _season_sort_key(code: str) -> tuple:
+    """
+    Returns a sort key for season codes like 'V25', 'I16', 'V8'.
+
+    Format: <prefix><2-digit-year>  where prefix is V (Verano) or I (Invierno).
+
+    Sort order: chronological ascending.
+    - Year extracted from numeric suffix (supports 1 or 2 digits).
+    - Within the same year: V (Verano) < I (Invierno) since summer precedes
+      the winter collection of the same calendar year.
+    - Codes that don’t match the expected pattern sort last, alphabetically.
+
+    Examples:
+        V8  -> (8,  0)   Verano  2008
+        I10 -> (10, 1)   Invierno 2010
+        V10 -> (10, 0)   Verano  2010
+        V25 -> (25, 0)   Verano  2025
+        I25 -> (25, 1)   Invierno 2025
+        V26 -> (26, 0)   Verano  2026
+    """
+    code = (code or "").strip().upper()
+    m = _re.match(r'^([VI])(\d{1,2})$', code)
+    if not m:
+        # Unknown format: sort after all known codes
+        return (9999, 9, code)
+    prefix, year_str = m.group(1), m.group(2)
+    year = int(year_str)
+    # V=0 (comes first within a year), I=1 (comes after)
+    season_order = 0 if prefix == 'V' else 1
+    return (year, season_order)
+
+
+def get_available_seasons(db: Session) -> list[str]:
+    """
+    Return a chronologically sorted list of distinct season codes from
+    product_references.
+
+    Season codes follow the pattern <prefix><year> where:
+    - V = Verano  (summer)
+    - I = Invierno (winter)
+    - year = 1- or 2-digit year (e.g. V8, V25, I16)
+
+    Ordering is chronological ascending: V8, I10, V10, I11, V12 ...
+    Within the same year Verano precedes Invierno.
+    """
+    rows = (
+        db.query(ProductReference.temporada)
+        .filter(ProductReference.temporada.isnot(None))
+        .filter(ProductReference.temporada != "")
+        .distinct()
+        .all()
+    )
+    seasons = [r.temporada.strip() for r in rows if r.temporada.strip()]
+    return sorted(seasons, key=_season_sort_key)
+
+
+def get_products_by_season_csv(
+    temporada: str,
+    db: Session,
+    only_active: bool = True,
+) -> list:
+    """
+    Return ALL products for a season (no pagination) ready for CSV export.
+    """
+    query = (
+        db.query(ProductReference)
+        .filter(
+            func.lower(ProductReference.temporada) == temporada.strip().lower()
+        )
+    )
+    if only_active:
+        query = query.filter(ProductReference.activo.is_(True))
+
+    query = query.order_by(
+        ProductReference.nombre_producto,
+        ProductReference.posicion_talla,
+        ProductReference.referencia,
+    )
+
+    products = query.all()
+
+    if not products:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No products found for season '{temporada}'"
+        )
+
+    return products
+
+
+def get_products_by_season(
+    temporada: str,
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    only_active: bool = True,
+) -> dict:
+    """
+    Return paginated products filtered by season.
+
+    Args:
+        temporada:   Season name to filter by (exact match, case-insensitive).
+        db:          SQLAlchemy session.
+        skip:        Pagination offset.
+        limit:       Max results to return.
+        only_active: When True, excludes products with activo=False.
+
+    Returns:
+        Dict with total_count, skip, limit, only_active and products list.
+
+    Raises:
+        HTTPException 404 if no products found for the given season.
+    """
+    query = (
+        db.query(ProductReference)
+        .filter(
+            func.lower(ProductReference.temporada) == temporada.strip().lower()
+        )
+    )
+
+    if only_active:
+        query = query.filter(ProductReference.activo.is_(True))
+
+    # Stable ordering: by product name, then size position, then reference
+    query = query.order_by(
+        ProductReference.nombre_producto,
+        ProductReference.posicion_talla,
+        ProductReference.referencia,
+    )
+
+    total_count = query.count()
+
+    if total_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No products found for season '{temporada}'"
+        )
+
+    products = query.offset(skip).limit(limit).all()
+
+    return {
+        "temporada": temporada.strip(),
+        "total_count": total_count,
+        "skip": skip,
+        "limit": limit,
+        "only_active": only_active,
+        "products": products,
+    }
 # ============================================================================
 # PACKING PRO
 # ============================================================================

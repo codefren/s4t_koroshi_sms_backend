@@ -15,14 +15,11 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # ── XPO endpoint config (override via env vars) ────────────────────────────────
-XPO_ENDPOINT_URL = os.getenv(
-    "XPO_ENDPOINT_URL",
-    "https://openservices-pre.fieldeas.com/apps/xpows/TTService.svc"
-)
-XPO_USER        = os.getenv("XPO_USER",     "666194")
-XPO_PASSWORD    = os.getenv("XPO_PASSWORD", "123qwe!E")
-XPO_COD_CLIENTE = os.getenv("XPO_COD_CLIENTE", "666194")
-XPO_EMAIL_ETIQUETAS = os.getenv("XPO_EMAIL_ETIQUETAS", "expediciones@koroshi.tv")
+XPO_ENDPOINT_URL    = os.getenv("XPO_ENDPOINT_URL")      # Required: XPO SOAP service URL
+XPO_USER            = os.getenv("XPO_USER")              # Required: XPO username
+XPO_PASSWORD        = os.getenv("XPO_PASSWORD")          # Required: XPO password
+XPO_COD_CLIENTE     = os.getenv("XPO_COD_CLIENTE")       # Required: XPO client code
+XPO_EMAIL_ETIQUETAS = os.getenv("XPO_EMAIL_ETIQUETAS")   # Required: labels destination email
 
 
 # ── Parameter dataclass ────────────────────────────────────────────────────────
