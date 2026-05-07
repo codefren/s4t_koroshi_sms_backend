@@ -1,7 +1,7 @@
 """
 Business logic for B2B API Service operations.
 """
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func
 from fastapi import HTTPException
 from typing import List, Optional
@@ -1272,6 +1272,7 @@ def get_products_by_season_csv(
     """
     query = (
         db.query(ProductReference)
+        .options(selectinload(ProductReference.eans))
         .filter(
             func.lower(ProductReference.temporada) == temporada.strip().lower()
         )

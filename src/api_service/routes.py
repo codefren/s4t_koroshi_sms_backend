@@ -648,8 +648,10 @@ async def download_products_by_season_csv(
     The response triggers a browser file download with a descriptive filename.
 
     **CSV columns:**
-    `id`, `referencia`, `sku`, `nombre_producto`, `color_id`, `nombre_color`,
+    `id`, `referencia`, `sku`, `eans`, `nombre_producto`, `color_id`, `nombre_color`,
     `talla`, `posicion_talla`, `temporada`, `activo`
+
+    `eans` contains all EAN barcodes for the product joined by `|` (e.g. `1234567890123|9876543210987`).
 
     **Path parameter:**
     - `temporada`: Season code, e.g. `V25` or `I16`.
@@ -671,9 +673,9 @@ async def download_products_by_season_csv(
 
     **CSV output sample:**
     ```
-    id,referencia,sku,nombre_producto,color_id,nombre_color,talla,posicion_talla,temporada,activo
-    1,A1B2C3,KOR-A1B2C3,Camisa Polo Manga Corta,000001,Rojo,M,3,V25,True
-    2,D4E5F6,KOR-D4E5F6,Pantalon Slim Fit,000002,Azul,L,4,V25,True
+    id,referencia,sku,eans,nombre_producto,color_id,nombre_color,talla,posicion_talla,temporada,activo
+    1,A1B2C3,KOR-A1B2C3,1234567890123|9876543210987,Camisa Polo Manga Corta,000001,Rojo,M,3,V25,True
+    2,D4E5F6,KOR-D4E5F6,3344556677889,Pantalon Slim Fit,000002,Azul,L,4,V25,True
     ```
     """
     products = get_products_by_season_csv(
@@ -688,17 +690,19 @@ async def download_products_by_season_csv(
 
     # Header row
     writer.writerow([
-        "id", "referencia", "sku", "nombre_producto",
+        "id", "referencia", "sku", "eans", "nombre_producto",
         "color_id", "nombre_color", "talla", "posicion_talla",
         "temporada", "activo",
     ])
 
     # Data rows
     for p in products:
+        eans_str = "|".join(e.ean for e in p.eans) if p.eans else ""
         writer.writerow([
             p.id,
             p.referencia,
             p.sku or "",
+            eans_str,
             p.nombre_producto,
             p.color_id,
             p.nombre_color or "",
