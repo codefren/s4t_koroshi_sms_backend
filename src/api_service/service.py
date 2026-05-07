@@ -1035,6 +1035,40 @@ def get_available_seasons(db: Session) -> list[str]:
     return sorted(seasons, key=_season_sort_key)
 
 
+def get_products_by_season_csv(
+    temporada: str,
+    db: Session,
+    only_active: bool = True,
+) -> list:
+    """
+    Return ALL products for a season (no pagination) ready for CSV export.
+    """
+    query = (
+        db.query(ProductReference)
+        .filter(
+            func.lower(ProductReference.temporada) == temporada.strip().lower()
+        )
+    )
+    if only_active:
+        query = query.filter(ProductReference.activo.is_(True))
+
+    query = query.order_by(
+        ProductReference.nombre_producto,
+        ProductReference.posicion_talla,
+        ProductReference.referencia,
+    )
+
+    products = query.all()
+
+    if not products:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No products found for season '{temporada}'"
+        )
+
+    return products
+
+
 def get_products_by_season(
     temporada: str,
     db: Session,

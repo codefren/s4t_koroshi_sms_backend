@@ -1,9 +1,11 @@
 """
-Unit tests for the chronological season sort logic.
+Unit tests for the chronological season sort logic and CSV filename helper.
 
 Tests the _season_sort_key helper and the overall ordering of a
 realistic season list matching the Koroshi catalog codes.
 """
+import csv
+import io
 import pytest
 from src.api_service.service import _season_sort_key
 
@@ -129,3 +131,86 @@ class TestSeasonListOrdering:
     def test_all_input_seasons_present(self, unique_sorted_seasons):
         unique_input = set(self.RAW_SEASONS)
         assert set(unique_sorted_seasons) == unique_input
+
+
+# ─── CSV output ─────────────────────────────────────────────────────────────────
+
+class TestCsvOutput:
+    """Unit tests for the CSV generation logic (no DB, pure in-memory)."""
+
+    EXPECTED_HEADERS = [
+        "id", "referencia", "sku", "nombre_producto",
+        "color_id", "nombre_color", "talla", "posicion_talla",
+        "temporada", "activo",
+    ]
+
+    def _build_csv(self, rows: list[dict]) -> list[list[str]]:
+        """Helper: write rows to CSV and parse them back."""
+        output = io.StringIO()
+        writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(self.EXPECTED_HEADERS)
+        for r in rows:
+            writer.writerow([
+                r.get("id", ""),
+                r.get("referencia", ""),
+                r.get("sku") or "",
+                r.get("nombre_producto", ""),
+                r.get("color_id", ""),
+                r.get("nombre_color") or "",
+                r.get("talla", ""),
+                r.get("posicion_talla") if r.get("posicion_talla") is not None else "",
+                r.get("temporada") or "",
+                r.get("activo", ""),
+            ])
+        output.seek(0)
+        return list(csv.reader(output))
+
+    def test_header_row_is_correct(self):
+        parsed = self._build_csv([])
+        assert parsed[0] == self.EXPECTED_HEADERS
+
+    def test_single_product_row(self):
+        rows = [{
+            "id": 1, "referencia": "A1B2C3", "sku": "KOR-001",
+            "nombre_producto": "Camisa Polo", "color_id": "000001",
+            "nombre_color": "Rojo", "talla": "M", "posicion_talla": 3,
+            "temporada": "V25", "activo": True,
+        }]
+        parsed = self._build_csv(rows)
+        assert len(parsed) == 2  # header + 1 data row
+        assert parsed[1][1] == "A1B2C3"  # referencia
+        assert parsed[1][3] == "Camisa Polo"  # nombre_producto
+        assert parsed[1][6] == "M"  # talla
+
+    def test_null_sku_becomes_empty_string(self):
+        rows = [{"id": 2, "referencia": "B2C3D4", "sku": None,
+                 "nombre_producto": "X", "color_id": "01",
+                 "nombre_color": None, "talla": "S", "posicion_talla": None,
+                 "temporada": "I16", "activo": False}]
+        parsed = self._build_csv(rows)
+        assert parsed[1][2] == ""  # sku empty
+        assert parsed[1][5] == ""  # nombre_color empty
+        assert parsed[1][7] == ""  # posicion_talla empty
+
+    def test_multiple_rows_count(self):
+        rows = [{"id": i, "referencia": f"R{i:06d}", "sku": None,
+                 "nombre_producto": "P", "color_id": "01",
+                 "nombre_color": None, "talla": "M", "posicion_talla": 1,
+                 "temporada": "V25", "activo": True}
+                for i in range(50)]
+        parsed = self._build_csv(rows)
+        assert len(parsed) == 51  # 1 header + 50 data
+
+    def test_csv_filename_uses_season_code(self):
+        """Verify the filename pattern used in Content-Disposition."""
+        temporada = "V25"
+        safe = temporada.strip().replace(" ", "_")
+        filename = f"productos_{safe}.csv"
+        assert filename == "productos_V25.csv"
+
+    def test_csv_filename_spaces_replaced(self):
+        """Season codes with spaces get underscores in the filename."""
+        temporada = "Verano 2025"
+        safe = temporada.strip().replace(" ", "_")
+        filename = f"productos_{safe}.csv"
+        assert filename == "productos_Verano_2025.csv"

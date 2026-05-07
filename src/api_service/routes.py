@@ -1,7 +1,10 @@
 """
 FastAPI routes for B2B Customer API Service.
 """
+import csv
+import io
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -34,6 +37,7 @@ from src.api_service.service import (
     register_box_number,
     get_available_seasons,
     get_products_by_season,
+    get_products_by_season_csv,
 )
 
 
@@ -535,3 +539,110 @@ async def get_products_by_season_endpoint(
         only_active=only_active,
     )
     return ProductsBySeasonResponse(**result)
+
+
+@router.get(
+    "/products/by-season/{temporada}/csv",
+    tags=["Products"],
+    summary="Download products by season as CSV",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "CSV file download",
+            "content": {"text/csv": {}},
+        },
+        404: {
+            "description": "No products found for the given season",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "No products found for season 'V99'"}
+                }
+            },
+        },
+    },
+)
+async def download_products_by_season_csv(
+    temporada: str,
+    only_active: bool = Query(True, description="Exclude inactive products from catalog"),
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db),
+):
+    """
+    Download the full product catalog for a season as a **CSV file**.
+
+    Returns all matching products in a single file — no pagination needed.
+    The response triggers a browser file download with a descriptive filename.
+
+    **CSV columns:**
+    `id`, `referencia`, `sku`, `nombre_producto`, `color_id`, `nombre_color`,
+    `talla`, `posicion_talla`, `temporada`, `activo`
+
+    **Path parameter:**
+    - `temporada`: Season code, e.g. `V25` or `I16`.
+      Use `/products/seasons` to list valid values.
+
+    **Query parameters:**
+    | Param | Default | Description |
+    |---|---|---|
+    | `only_active` | true | Exclude inactive products |
+
+    **Authentication:** Requires `X-Api-Key` header.
+
+    **Example:**
+    ```
+    curl -H "X-Api-Key: cust_live_abc123..." \\
+         "http://localhost:8000/api/service/products/by-season/V25/csv" \\
+         --output productos_V25.csv
+    ```
+
+    **CSV output sample:**
+    ```
+    id,referencia,sku,nombre_producto,color_id,nombre_color,talla,posicion_talla,temporada,activo
+    1,A1B2C3,KOR-A1B2C3,Camisa Polo Manga Corta,000001,Rojo,M,3,V25,True
+    2,D4E5F6,KOR-D4E5F6,Pantalon Slim Fit,000002,Azul,L,4,V25,True
+    ```
+    """
+    products = get_products_by_season_csv(
+        temporada=temporada,
+        db=db,
+        only_active=only_active,
+    )
+
+    # Build CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+
+    # Header row
+    writer.writerow([
+        "id", "referencia", "sku", "nombre_producto",
+        "color_id", "nombre_color", "talla", "posicion_talla",
+        "temporada", "activo",
+    ])
+
+    # Data rows
+    for p in products:
+        writer.writerow([
+            p.id,
+            p.referencia,
+            p.sku or "",
+            p.nombre_producto,
+            p.color_id,
+            p.nombre_color or "",
+            p.talla,
+            p.posicion_talla if p.posicion_talla is not None else "",
+            p.temporada or "",
+            p.activo,
+        ])
+
+    output.seek(0)
+    safe_season = temporada.strip().replace(" ", "_")
+    filename = f"productos_{safe_season}.csv"
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Total-Count": str(len(products)),
+        },
+    )
