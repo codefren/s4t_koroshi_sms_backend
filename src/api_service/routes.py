@@ -10,7 +10,7 @@ from typing import List, Optional
 import os
 
 from src.adapters.secondary.database.config import get_db
-from src.adapters.secondary.database.orm import Customer
+from src.adapters.secondary.database.orm import Customer, EAN
 from src.api_service.auth import verify_customer_api_key
 from src.api_service.schemas import (
     OrderListItem,
@@ -684,6 +684,17 @@ async def download_products_by_season_csv(
         only_active=only_active,
     )
 
+    # Fetch all EANs for these products in a single query
+    product_ids = [p.id for p in products]
+    ean_rows = (
+        db.query(EAN.product_reference_id, EAN.ean)
+        .filter(EAN.product_reference_id.in_(product_ids))
+        .all()
+    )
+    eans_by_product: dict = {}
+    for row in ean_rows:
+        eans_by_product.setdefault(row.product_reference_id, []).append(row.ean)
+
     # Build CSV in memory
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
@@ -697,7 +708,7 @@ async def download_products_by_season_csv(
 
     # Data rows
     for p in products:
-        eans_str = "|".join(e.ean for e in p.eans) if p.eans else ""
+        eans_str = "|".join(eans_by_product.get(p.id, []))
         writer.writerow([
             p.id,
             p.referencia,
