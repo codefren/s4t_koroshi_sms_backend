@@ -86,7 +86,7 @@ def list_b2b_orders(
     
     **Example:**
     ```
-    curl -H "X-Api-Key: cust_live_abc123..." \
+    curl -H "X-Api-Key: YOUR_API_KEY" \
          "http://localhost:8000/api/service/orders/b2b?skip=0&limit=50"
     ```
     
@@ -132,7 +132,7 @@ def list_b2c_orders(
     
     **Example:**
     ```
-    curl -H "X-Api-Key: cust_live_abc123..." \
+    curl -H "X-Api-Key: YOUR_API_KEY" \
          "http://localhost:8000/api/service/orders/b2c?skip=0&limit=50"
     ```
     
@@ -181,7 +181,7 @@ def get_order_lines(
     
     **Example:**
     ```
-    curl -H "X-Api-Key: cust_live_abc123..." \
+    curl -H "X-Api-Key: YOUR_API_KEY" \
          "http://localhost:8000/api/service/orders/123/lines?skip=0&limit=50"
     ```
     
@@ -235,7 +235,7 @@ def batch_update_order_endpoint(
     
     **Example:**
     ```
-    curl -X PUT -H "X-Api-Key: cust_live_abc123..." \
+    curl -X PUT -H "X-Api-Key: YOUR_API_KEY" \
          -H "Content-Type: application/json" \
          -d '{
            "order_number": "ORD-12345",
@@ -509,7 +509,7 @@ async def list_seasons(
 
     **Example:**
     ```
-    curl -H "X-Api-Key: cust_live_abc123..." \\
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
          http://localhost:8000/api/service/products/seasons
     ```
 
@@ -570,13 +570,13 @@ async def get_products_by_season_endpoint(
 
     **Example — first page:**
     ```
-    curl -H "X-Api-Key: cust_live_abc123..." \\
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
          "http://localhost:8000/api/service/products/by-season/Verano%202025?skip=0&limit=100"
     ```
 
     **Example — include inactive:**
     ```
-    curl -H "X-Api-Key: cust_live_abc123..." \\
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
          "http://localhost:8000/api/service/products/by-season/Verano%202025?only_active=false"
     ```
 
@@ -664,7 +664,7 @@ async def download_products_by_season_csv(
 
     **Example:**
     ```
-    curl -H "X-Api-Key: cust_live_abc123..." \\
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
          "http://localhost:8000/api/service/products/by-season/V25/csv" \\
          --output productos_V25.csv
     ```
