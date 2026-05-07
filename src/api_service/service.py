@@ -1277,7 +1277,7 @@ def get_products_by_season_csv(
         )
     )
     if only_active:
-        query = query.filter(ProductReference.activo.is_(True))
+        query = query.filter(ProductReference.activo == True)
 
     query = query.order_by(
         ProductReference.nombre_producto,
@@ -1327,7 +1327,7 @@ def get_products_by_season(
     )
 
     if only_active:
-        query = query.filter(ProductReference.activo.is_(True))
+        query = query.filter(ProductReference.activo == True)
 
     # Stable ordering: by product name, then size position, then reference
     query = query.order_by(
