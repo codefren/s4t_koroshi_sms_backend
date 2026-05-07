@@ -976,19 +976,63 @@ def register_box_number(request: RegisterBoxNumberRequest, db: Session) -> Regis
 
 # ─── Products by Season ───────────────────────────────────────────────────────
 
+import re as _re
+
+
+def _season_sort_key(code: str) -> tuple:
+    """
+    Returns a sort key for season codes like 'V25', 'I16', 'V8'.
+
+    Format: <prefix><2-digit-year>  where prefix is V (Verano) or I (Invierno).
+
+    Sort order: chronological ascending.
+    - Year extracted from numeric suffix (supports 1 or 2 digits).
+    - Within the same year: V (Verano) < I (Invierno) since summer precedes
+      the winter collection of the same calendar year.
+    - Codes that don’t match the expected pattern sort last, alphabetically.
+
+    Examples:
+        V8  -> (8,  0)   Verano  2008
+        I10 -> (10, 1)   Invierno 2010
+        V10 -> (10, 0)   Verano  2010
+        V25 -> (25, 0)   Verano  2025
+        I25 -> (25, 1)   Invierno 2025
+        V26 -> (26, 0)   Verano  2026
+    """
+    code = (code or "").strip().upper()
+    m = _re.match(r'^([VI])(\d{1,2})$', code)
+    if not m:
+        # Unknown format: sort after all known codes
+        return (9999, 9, code)
+    prefix, year_str = m.group(1), m.group(2)
+    year = int(year_str)
+    # V=0 (comes first within a year), I=1 (comes after)
+    season_order = 0 if prefix == 'V' else 1
+    return (year, season_order)
+
+
 def get_available_seasons(db: Session) -> list[str]:
     """
-    Return a sorted list of distinct non-null season values in product_references.
+    Return a chronologically sorted list of distinct season codes from
+    product_references.
+
+    Season codes follow the pattern <prefix><year> where:
+    - V = Verano  (summer)
+    - I = Invierno (winter)
+    - year = 1- or 2-digit year (e.g. V8, V25, I16)
+
+    Ordering is chronological ascending: V8, I10, V10, I11, V12 ...
+    Within the same year Verano precedes Invierno.
     """
     rows = (
         db.query(ProductReference.temporada)
         .filter(ProductReference.temporada.isnot(None))
         .filter(ProductReference.temporada != "")
         .distinct()
-        .order_by(ProductReference.temporada)
         .all()
     )
-    return [r.temporada for r in rows]
+    seasons = [r.temporada.strip() for r in rows if r.temporada.strip()]
+    return sorted(seasons, key=_season_sort_key)
 
 
 def get_products_by_season(
