@@ -543,6 +543,7 @@ def health_check():
     summary="List available seasons",
 )
 async def list_seasons(
+    customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db),
 ):
     """
@@ -592,6 +593,7 @@ async def get_products_by_season_endpoint(
     skip: int = Query(0, ge=0, description="Number of records to skip (pagination)"),
     limit: int = Query(100, ge=1, le=500, description="Max records to return per page"),
     only_active: bool = Query(True, description="Exclude inactive products from catalog"),
+    customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db),
 ):
     """
@@ -683,6 +685,7 @@ async def get_products_by_season_endpoint(
 async def download_products_by_season_csv(
     temporada: str,
     only_active: bool = Query(True, description="Exclude inactive products from catalog"),
+    customer: Customer = Depends(verify_customer_api_key),
     db: Session = Depends(get_db),
 ):
     """
