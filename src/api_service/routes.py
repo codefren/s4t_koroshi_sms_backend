@@ -31,7 +31,7 @@ from src.api_service.schemas import (
     ProductsBySeasonResponse,
     PackingProListResponse,
     PackingProLinesResponse,
-
+    ClientsListResponse,
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
@@ -47,6 +47,7 @@ from src.api_service.service import (
     get_products_by_season_csv,
     get_packing_pro_list,
     get_packing_pro_lines,
+    get_clients_list,
 )
 
 
@@ -474,6 +475,51 @@ def get_packing_pro_lines_endpoint(
     **Authentication:** Requires X-Api-Key header
     """
     return get_packing_pro_lines(company, packing_id, db, skip, limit)
+
+
+@router.get("/clients", response_model=ClientsListResponse, tags=["Clients"])
+def list_clients(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(100, ge=1, le=500, description="Max records to return"),
+    search: Optional[str] = Query(None, description="Filter by description or codigo (case-insensitive)"),
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    List all clients with pagination and optional search.
+
+    **Authentication:** Requires `X-Api-Key` header.
+
+    **Filters:**
+    - `search`: partial match against `description` or `codigo` (case-insensitive)
+
+    **Example:**
+    ```
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
+         "http://localhost:8000/api/service/clients?skip=0&limit=50&search=koroshi"
+    ```
+
+    **Response:**
+    ```json
+    {
+        "total_count": 10,
+        "skip": 0,
+        "limit": 50,
+        "clients": [
+            {
+                "id": 1,
+                "description": "Cliente Ejemplo",
+                "codigo": "CLI01",
+                "phone_number": "+34 600 000 000",
+                "city": "Madrid",
+                "province": "Madrid",
+                "country": "España"
+            }
+        ]
+    }
+    ```
+    """
+    return get_clients_list(db=db, skip=skip, limit=limit, search=search)
 
 
 @router.get("/health", tags=["Health"])

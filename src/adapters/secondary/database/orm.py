@@ -14,6 +14,12 @@ class Client(Base):
     description = Column(String(100), nullable=False)
     codigo = Column(String(10), nullable=False, index=True)
     phone_number = Column(String(50), nullable=True)
+    address = Column(String(300), nullable=True)
+    postal_code = Column(String(10), nullable=True)
+    city = Column(String(100), nullable=True)
+    province = Column(String(100), nullable=True)
+    country = Column(String(100), nullable=True)
+    email = Column(String(200), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 

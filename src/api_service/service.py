@@ -36,14 +36,15 @@ from src.api_service.erp_service import get_packing_info
 
 from src.adapters.secondary.database.orm import (
     Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen,
-    PackingPro, PackingProLine, XpoExpedicion
+    PackingPro, PackingProLine, XpoExpedicion, Client
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
     OrderListItem, OrderLineSimple, OrderLinesResponse, UpdateOrderResponse,
     OrdersListResponse, OrderLineUpdate, BatchUpdateOrderResponse, RegisterStockRequest, RegisterStockResponse,
     RegisterBoxNumberRequest, RegisterBoxNumberResponse,
-    PackingProListItem, PackingProListResponse, PackingProLineItem, PackingProLinesResponse
+    PackingProListItem, PackingProListResponse, PackingProLineItem, PackingProLinesResponse,
+    ClientsListResponse,
 )
 
 # Logger configuration
@@ -120,17 +121,28 @@ def get_customer_b2b_orders(
     
     db.commit()
     
+    # Preload clients in a single query to avoid N+1
+    client_ids = [o.client for o in orders if o.client is not None]
+    clients_map = {}
+    if client_ids:
+        clients_map = {
+            c.id: c
+            for c in db.query(Client).filter(Client.id.in_(client_ids)).all()
+        }
+
     # Add total_lines count to each order
     orders_with_lines = []
     for order in orders:
         lines_count = db.query(OrderLine).filter(OrderLine.order_id == order.id).count()
+        client_obj = clients_map.get(order.client) if order.client else None
         order_dict = {
             "id": order.id,
             "order_number": order.numero_orden,
-            "total_lines": lines_count
+            "total_lines": lines_count,
+            "client_info": client_obj,
         }
         orders_with_lines.append(order_dict)
-    
+
     return OrdersListResponse(
         total_count=total_count,
         skip=skip,
@@ -206,17 +218,28 @@ def get_customer_b2c_orders(
     
     db.commit()
     
+    # Preload clients in a single query to avoid N+1
+    client_ids = [o.client for o in orders if o.client is not None]
+    clients_map = {}
+    if client_ids:
+        clients_map = {
+            c.id: c
+            for c in db.query(Client).filter(Client.id.in_(client_ids)).all()
+        }
+
     # Add total_lines count to each order
     orders_with_lines = []
     for order in orders:
         lines_count = db.query(OrderLine).filter(OrderLine.order_id == order.id).count()
+        client_obj = clients_map.get(order.client) if order.client else None
         order_dict = {
             "id": order.id,
             "order_number": order.numero_orden,
-            "total_lines": lines_count
+            "total_lines": lines_count,
+            "client_info": client_obj,
         }
         orders_with_lines.append(order_dict)
-    
+
     return OrdersListResponse(
         total_count=total_count,
         skip=skip,
@@ -1470,4 +1493,30 @@ def get_packing_pro_lines(
         skip=skip,
         limit=limit,
         lines=lines_out
+    )
+
+
+def get_clients_list(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    search: Optional[str] = None,
+) -> ClientsListResponse:
+    """Return paginated list of clients, optionally filtered by description or codigo."""
+    query = db.query(Client)
+
+    if search:
+        term = f"%{search}%"
+        query = query.filter(
+            Client.description.ilike(term) | Client.codigo.ilike(term)
+        )
+
+    total_count = query.count()
+    clients = query.order_by(Client.id).offset(skip).limit(limit).all()
+
+    return ClientsListResponse(
+        total_count=total_count,
+        skip=skip,
+        limit=limit,
+        clients=clients,
     )

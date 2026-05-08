@@ -30,12 +30,29 @@ class CustomerResponse(CustomerBase):
 # ORDER SCHEMAS
 # ============================================================================
 
+class ClientLocationInfo(BaseModel):
+    """Location data from the clientes table"""
+    id: int
+    description: str
+    codigo: str
+    phone_number: Optional[str] = None
+    address: Optional[str] = None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    country: Optional[str] = None
+    email: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class OrderListItem(BaseModel):
     """Minimal order info for listing"""
     id: int
     order_number: str = Field(validation_alias="numero_orden")
     total_lines: int
-    
+    client_info: Optional[ClientLocationInfo] = None
+
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
@@ -273,6 +290,35 @@ class ProductsBySeasonResponse(BaseModel):
     limit: int = Field(..., description="Max records per page used")
     only_active: bool = Field(..., description="Whether inactive products were excluded")
     products: list[ProductBySeasonItem] = Field(..., description="List of products")
+# ============================================================================
+# CLIENT SCHEMAS
+# ============================================================================
+
+class ClientItem(BaseModel):
+    """Client information"""
+    id: int
+    description: str
+    codigo: str
+    phone_number: Optional[str] = None
+    address: Optional[str] = None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    country: Optional[str] = None
+    email: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ClientsListResponse(BaseModel):
+    """Paginated list of clients"""
+    total_count: int
+    skip: int
+    limit: int
+    clients: List[ClientItem]
+
+
 # ============================================================================
 # PACKING PRO SCHEMAS
 # ============================================================================
