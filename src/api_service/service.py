@@ -24,7 +24,7 @@ def _download_xpo_pdf(consignment_id: str, pdf_url: str) -> Optional[str]:
         os.makedirs(XPO_LABELS_DIR, exist_ok=True)
         filename  = f"{consignment_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         full_path = os.path.join(XPO_LABELS_DIR, filename)
-        r = requests.get(pdf_url, timeout=30)
+        r = requests.get(pdf_url, timeout=600)
         r.raise_for_status()
         with open(full_path, "wb") as f:
             f.write(r.content)
@@ -756,9 +756,9 @@ def batch_update_order(
                 "Content-Type": "application/json",
                 "X-API-Key": EXTERNAL_API_KEY
             },
-            timeout=None
+            timeout=600
         )
-        
+
         # 8.6 Log response from external API
         logger.info(f"External Packing API response - Status: {response.status_code}")
         logger.info(f"Response Body: {response.text}")
@@ -888,7 +888,7 @@ def batch_update_picked_order(
                 "Content-Type": "application/json",
                 "X-API-Key": EXTERNAL_API_KEY
             },
-            timeout=None
+            timeout=600
         )
 
         logger.info(f"External API response - Status: {response.status_code}, Body: {response.text}")
@@ -1076,9 +1076,9 @@ def register_stock(request: RegisterStockRequest, db: Session) -> RegisterStockR
                 "Content-Type": "application/json",
                 "X-API-Key": EXTERNAL_API_KEY
             },
-            timeout=None
+            timeout=600
         )
-        
+
         # Step 4: Log response from external API
         logger.info(f"External API response - Status: {response.status_code}")
         logger.info(f"Response Body: {response.text}")
