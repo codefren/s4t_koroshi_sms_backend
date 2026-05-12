@@ -258,6 +258,48 @@ class RegisterBoxNumberResponse(BaseModel):
     box_number: str = Field(..., description="Box number registered")
 
 
+# ============================================================================
+# BOX VALIDATION SCHEMAS
+# ============================================================================
+
+class BoxValidationLineRequest(BaseModel):
+    sku: str = Field(..., description="SKU del producto")
+    quantity: int = Field(..., ge=1, description="Cantidad recibida físicamente")
+
+
+class BoxValidationRequest(BaseModel):
+    license_plate: str = Field(..., max_length=50, description="License plate (box identifier)")
+    content: List[BoxValidationLineRequest] = Field(..., min_length=1, description="Box content lines")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "license_plate": "LP-00123",
+                "content": [
+                    {"sku": "ABC123", "quantity": 5},
+                    {"sku": "DEF456", "quantity": 3}
+                ]
+            }
+        }
+    )
+
+
+class BoxValidationLineResult(BaseModel):
+    sku: str
+    quantity: int
+    teorico: Optional[int] = None
+    diferencia: Optional[int] = None
+    estado: Optional[str] = None    # OK / FALTA / EXCEDE
+
+
+class BoxValidationResponse(BaseModel):
+    status: str                                     # OK / PARCIAL / ERROR
+    message: str
+    license_plate: str
+    validation_id: Optional[int] = None
+    lineas: List[BoxValidationLineResult] = []
+
+
 # ─── Products by Season ───────────────────────────────────────────────────────
 
 class ProductBySeasonItem(BaseModel):

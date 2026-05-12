@@ -32,6 +32,8 @@ from src.api_service.schemas import (
     PackingProListResponse,
     PackingProLinesResponse,
     ClientsListResponse,
+    BoxValidationRequest,
+    BoxValidationResponse,
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
@@ -48,6 +50,7 @@ from src.api_service.service import (
     get_packing_pro_list,
     get_packing_pro_lines,
     get_clients_list,
+    validate_box,
 )
 
 
@@ -520,6 +523,60 @@ def list_clients(
     ```
     """
     return get_clients_list(db=db, skip=skip, limit=limit, search=search)
+
+
+@router.post(
+    "/box/validate",
+    response_model=BoxValidationResponse,
+    tags=["Box Validation"],
+    responses={
+        502: {"description": "Error conectando con la API externa de validación"},
+    },
+)
+def validate_box_endpoint(
+    request: BoxValidationRequest,
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db),
+):
+    """
+    Valida el contenido físico de una caja contra el teórico.
+
+    Envía la matrícula y el contenido recibido físicamente a la API externa,
+    que compara contra el teórico y devuelve el estado de cada línea:
+    - **OK**: Cantidad coincide con el teórico
+    - **FALTA**: Se recibió menos de lo esperado
+    - **EXCEDE**: Se recibió más de lo esperado
+
+    El resultado se guarda en la base de datos para trazabilidad.
+
+    **Authentication:** Requires `X-Api-Key` header
+
+    **Request example:**
+    ```json
+    {
+        "license_plate": "LP-00123",
+        "content": [
+            {"sku": "ABC123", "quantity": 5},
+            {"sku": "DEF456", "quantity": 3}
+        ]
+    }
+    ```
+
+    **Response example:**
+    ```json
+    {
+        "status": "PARCIAL",
+        "message": "Validation completed for license plate 'LP-00123'",
+        "license_plate": "LP-00123",
+        "validation_id": 42,
+        "lineas": [
+            {"sku": "ABC123", "quantity": 5, "teorico": 5, "diferencia": 0, "estado": "OK"},
+            {"sku": "DEF456", "quantity": 3, "teorico": 5, "diferencia": -2, "estado": "FALTA"}
+        ]
+    }
+    ```
+    """
+    return validate_box(request=request, db=db)
 
 
 @router.get("/health", tags=["Health"])

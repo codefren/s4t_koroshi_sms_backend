@@ -798,8 +798,8 @@ class ProductFamily(Base):
     __tablename__ = "product_families"
 
     id = Column(Integer, primary_key=True, index=True)
-    nombre = Column(String(100), unique=True, nullable=False, index=True)
-    descripcion = Column(String(250), nullable=True)
+    nombre = Column(String(100), unique=True, nullable=False, index=True) # id del ERP de la familia
+    descripcion = Column(String(250), nullable=True) # descripcion de la familia
     
     # Máximo de unidades que caben en UNA ubicación de picking para esta familia
     capacidad_ubicacion = Column(Integer, nullable=False, default=20)
@@ -1521,6 +1521,52 @@ class XpoExpedicion(Base):
     created_at     = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     order = relationship("Order", backref="xpo_expediciones")
+
+
+class APIBoxValidation(Base):
+    """
+    Cabecera de una validación de caja recibida en almacén.
+    Registra el resultado global de comparar el contenido físico
+    contra el teórico devuelto por la API externa.
+
+    Status values:
+    - OK       : Todas las líneas coinciden exactamente
+    - PARCIAL  : Alguna línea falta o excede
+    - ERROR    : La API externa devolvió error
+    """
+    __tablename__ = "api_box_validations"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    license_plate = Column(String(50), nullable=False, index=True)
+    status        = Column(String(20), nullable=False, default='OK', index=True)
+    created_at    = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    lines = relationship("APIBoxValidationLine", back_populates="validation", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<APIBoxValidation license_plate={self.license_plate} status={self.status}>"
+
+
+class APIBoxValidationLine(Base):
+    """
+    Línea de resultado de validación de caja.
+    Una por cada SKU enviado en la verificación.
+    """
+    __tablename__ = "api_box_validation_lines"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    validation_id  = Column(Integer, ForeignKey("api_box_validations.id", ondelete="CASCADE"), nullable=False, index=True)
+    sku            = Column(String(100), nullable=False)
+    quantity       = Column(Integer, nullable=False)
+    # Datos devueltos por la API externa
+    teorico        = Column(Integer, nullable=True)
+    diferencia     = Column(Integer, nullable=True)
+    estado         = Column(String(20), nullable=True)   # OK / FALTA / EXCEDE
+
+    validation = relationship("APIBoxValidation", back_populates="lines")
+
+    def __repr__(self):
+        return f"<APIBoxValidationLine sku={self.sku} estado={self.estado}>"
 
     def __repr__(self):
         return f"<StockMovement {self.id} {self.tipo} qty={self.cantidad} loc={self.product_location_id}>"

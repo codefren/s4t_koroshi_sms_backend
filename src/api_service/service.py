@@ -36,7 +36,7 @@ from src.api_service.erp_service import get_packing_info
 
 from src.adapters.secondary.database.orm import (
     Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen,
-    PackingPro, PackingProLine, XpoExpedicion, Client
+    PackingPro, PackingProLine, XpoExpedicion, Client, APIBoxValidation, APIBoxValidationLine
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
@@ -45,6 +45,7 @@ from src.api_service.schemas import (
     RegisterBoxNumberRequest, RegisterBoxNumberResponse,
     PackingProListItem, PackingProListResponse, PackingProLineItem, PackingProLinesResponse,
     ClientsListResponse,
+    BoxValidationRequest, BoxValidationResponse, BoxValidationLineResult,
 )
 
 # Logger configuration
@@ -1519,4 +1520,120 @@ def get_clients_list(
         skip=skip,
         limit=limit,
         clients=clients,
+    )
+
+
+# ─── URL configurable hasta que la API externa esté definida ──────────────────
+BOX_VALIDATION_API_URL = os.getenv(
+    'BOX_VALIDATION_API_URL',
+    'http://localhost:5053/api/Validacion'
+)
+
+
+def validate_box(request: BoxValidationRequest, db: Session) -> BoxValidationResponse:
+    """
+    Valida el contenido físico de una caja contra el teórico de la API externa.
+
+    Flujo:
+    1. Envía matrícula + líneas a la API externa
+    2. La API externa compara contra el teórico y devuelve estado por línea
+       (OK / FALTA / EXCEDE)
+    3. Guarda el resultado en api_box_validations + api_box_validation_lines
+    4. Retorna el resultado completo
+
+    Raises:
+        HTTPException 502: Si la API externa no responde o devuelve error inesperado
+    """
+    external_payload = {
+        "empresaId": "0001",
+        "licensePlate": request.license_plate,
+        "lineas": [
+            {"sku": line.sku, "cantidad": line.quantity}
+            for line in request.content
+        ]
+    }
+
+    logger.info(f"Validating box {request.license_plate} — URL: {BOX_VALIDATION_API_URL}")
+    logger.info(f"Payload: {json.dumps(external_payload, indent=2, ensure_ascii=False)}")
+
+    try:
+        response = requests.post(
+            BOX_VALIDATION_API_URL,
+            json=external_payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-API-Key": EXTERNAL_API_KEY,
+            },
+            timeout=60,
+        )
+
+        logger.info(f"External API response — Status: {response.status_code}, Body: {response.text}")
+
+        try:
+            ext_data = response.json()
+        except json.JSONDecodeError:
+            ext_data = {}
+
+        if response.status_code not in (200, 201):
+            error_msg = ext_data.get("error", ext_data.get("message", response.text))
+            raise HTTPException(status_code=502, detail=f"API externa error: {error_msg}")
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"No se pudo conectar con la API externa: {str(e)}")
+
+    # Construir resultados por línea a partir de la respuesta externa
+    # Se espera: { "lineas": [{ "sku", "teorico", "recibido", "diferencia", "estado" }] }
+    ext_lines_map: dict = {}
+    for ext_line in ext_data.get("lineas", []):
+        sku = ext_line.get("sku", "")
+        ext_lines_map[sku] = ext_line
+
+    line_results: list[BoxValidationLineResult] = []
+    has_discrepancy = False
+
+    for req_line in request.content:
+        ext = ext_lines_map.get(req_line.sku, {})
+        estado = ext.get("estado", None)
+        teorico = ext.get("teorico", None)
+        diferencia = ext.get("diferencia", None)
+
+        if estado and estado != "OK":
+            has_discrepancy = True
+
+        line_results.append(BoxValidationLineResult(
+            sku=req_line.sku,
+            quantity=req_line.quantity,
+            teorico=teorico,
+            diferencia=diferencia,
+            estado=estado,
+        ))
+
+    global_status = "PARCIAL" if has_discrepancy else "OK"
+
+    # Persistir resultado en BD
+    validation = APIBoxValidation(
+        license_plate=request.license_plate,
+        status=global_status,
+    )
+    db.add(validation)
+    db.flush()
+
+    for result in line_results:
+        db.add(APIBoxValidationLine(
+            validation_id=validation.id,
+            sku=result.sku,
+            quantity=result.quantity,
+            teorico=result.teorico,
+            diferencia=result.diferencia,
+            estado=result.estado,
+        ))
+
+    db.commit()
+
+    return BoxValidationResponse(
+        status=global_status,
+        message=f"Validation completed for license plate '{request.license_plate}'",
+        license_plate=request.license_plate,
+        validation_id=validation.id,
+        lineas=line_results,
     )
