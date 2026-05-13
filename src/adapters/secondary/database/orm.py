@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, Boolean, Text, DateTime, 
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
 from datetime import datetime, timezone
-from src.adapters.secondary.database.config import Base
+from src.adapters.secondary.database.config import Base, BaseKoroshi
 
 
 class Client(Base):
@@ -826,7 +826,7 @@ class ProductSubFamily(Base):
     __tablename__ = "product_sub_families"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), unique=True, nullable=False, index=True)
+    name = Column(String(100), unique=True, nullable=False, index=True) # en name 
     description = Column(String(250), nullable=True)
 
     active = Column(Boolean, default=1, nullable=False, index=True)
@@ -1570,3 +1570,20 @@ class APIBoxValidationLine(Base):
 
     def __repr__(self):
         return f"<StockMovement {self.id} {self.tipo} qty={self.cantidad} loc={self.product_location_id}>"
+
+
+class StockSemanaTotal(BaseKoroshi):
+    """
+    Stock semanal por artículo y almacén (DB: S4T_KOROSHI). Solo lectura.
+    """
+    __tablename__ = "tbdStockSemanaTotal"
+
+    fldYear      = Column(String(10), primary_key=True, nullable=False)
+    fldWeek      = Column(String(10), primary_key=True, nullable=False)
+    fldIdAlmacen = Column(String(50), primary_key=True, nullable=False)
+    fldIdArticulo= Column(String(50), primary_key=True, nullable=False)
+    fldIdColor   = Column(String(50), primary_key=True, nullable=False)
+    fldStock     = Column(Float,      nullable=True)
+
+    def __repr__(self):
+        return f"<StockSemanaTotal {self.fldYear}/{self.fldWeek} art={self.fldIdArticulo} color={self.fldIdColor} stock={self.fldStock}>"

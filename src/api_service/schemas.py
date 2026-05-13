@@ -415,3 +415,28 @@ class PackingProLinesResponse(BaseModel):
     skip: int
     limit: int
     lines: List[PackingProLineItem]
+
+
+# ============================================================================
+# STOCK SEMANAL SCHEMAS
+# ============================================================================
+
+class StockSemanaItem(BaseModel):
+    """Single row of weekly stock"""
+    year: str = Field(alias="fldYear")
+    week: str = Field(alias="fldWeek")
+    almacen_id: str = Field(alias="fldIdAlmacen")
+    articulo_id: str = Field(alias="fldIdArticulo")
+    color_id: str = Field(alias="fldIdColor")
+    stock: Optional[float] = Field(None, alias="fldStock")
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class StockSemanaListResponse(BaseModel):
+    """Paginated response for weekly stock"""
+    year: str
+    total_count: int
+    skip: int
+    limit: int
+    items: List[StockSemanaItem]

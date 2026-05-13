@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
 
-from src.adapters.secondary.database.config import get_db
+from src.adapters.secondary.database.config import get_db, get_db_koroshi
 from src.adapters.secondary.database.orm import Customer, EAN, ProductReference as ProductReferenceORM
 from sqlalchemy import func as sa_func
 from src.api_service.auth import verify_customer_api_key
@@ -34,6 +34,7 @@ from src.api_service.schemas import (
     ClientsListResponse,
     BoxValidationRequest,
     BoxValidationResponse,
+    StockSemanaListResponse,
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
@@ -51,6 +52,7 @@ from src.api_service.service import (
     get_packing_pro_lines,
     get_clients_list,
     validate_box,
+    get_stock_semana,
 )
 
 
@@ -589,6 +591,78 @@ def health_check():
         "service": "B2B Customer API",
         "version": "1.0.0"
     }
+
+
+# ─── Stock Semanal ────────────────────────────────────────────────────────────
+
+@router.get(
+    "/stock/weekly/{year}",
+    response_model=StockSemanaListResponse,
+    tags=["Stock"],
+    summary="Stock semanal por año",
+)
+def get_stock_weekly(
+    year: str,
+    skip: int = Query(0, ge=0, description="Registros a saltar"),
+    limit: int = Query(1000, ge=1, le=5000, description="Máximo de registros a devolver"),
+    week: Optional[str] = Query(None, description="Filtrar por semana, p.ej. '10'"),
+    almacen_id: Optional[str] = Query(None, description="Filtrar por almacén"),
+    articulo_id: Optional[str] = Query(None, description="Filtrar por artículo"),
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db_koroshi),
+):
+    """
+    Devuelve el stock semanal de la tabla `tbdStockSemanaTotal` filtrado por año.
+
+    **Parámetros de ruta:**
+    - `year`: Año a consultar, p.ej. `2026`
+
+    **Filtros opcionales:**
+    | Param | Descripción |
+    |---|---|
+    | `week` | Número de semana, p.ej. `10` |
+    | `almacen_id` | Código de almacén |
+    | `articulo_id` | Código de artículo |
+
+    **Paginación:** `skip` / `limit` (máximo 5000 por llamada)
+
+    **Authentication:** Requires `X-Api-Key` header.
+
+    **Ejemplo:**
+    ```
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
+         "http://localhost:8000/api/service/stock/weekly/2026?week=10&limit=500"
+    ```
+
+    **Response:**
+    ```json
+    {
+        "year": "2026",
+        "total_count": 1234,
+        "skip": 0,
+        "limit": 1000,
+        "items": [
+            {
+                "year": "2026",
+                "week": "10",
+                "almacen_id": "00000001",
+                "articulo_id": "ART001",
+                "color_id": "000001",
+                "stock": 42.0
+            }
+        ]
+    }
+    ```
+    """
+    return get_stock_semana(
+        year=year,
+        db=db,
+        skip=skip,
+        limit=limit,
+        week=week,
+        almacen_id=almacen_id,
+        articulo_id=articulo_id,
+    )
 
 
 # ─── Products by Season ─────────────────────────────────────────────────────

@@ -36,7 +36,7 @@ from src.api_service.erp_service import get_packing_info
 
 from src.adapters.secondary.database.orm import (
     Order, OrderLine, ProductReference, PackingBox, Customer, OrderStatus, OrderLineBoxDistribution, APIStockHistorico, APIMatricula, Almacen,
-    PackingPro, PackingProLine, XpoExpedicion, Client, APIBoxValidation, APIBoxValidationLine
+    PackingPro, PackingProLine, XpoExpedicion, Client, APIBoxValidation, APIBoxValidationLine, StockSemanaTotal
 )
 from src.api_service.auth import get_customer_almacenes, verify_warehouse_access
 from src.api_service.schemas import (
@@ -46,6 +46,7 @@ from src.api_service.schemas import (
     PackingProListItem, PackingProListResponse, PackingProLineItem, PackingProLinesResponse,
     ClientsListResponse,
     BoxValidationRequest, BoxValidationResponse, BoxValidationLineResult,
+    StockSemanaListResponse,
 )
 
 # Logger configuration
@@ -1636,4 +1637,53 @@ def validate_box(request: BoxValidationRequest, db: Session) -> BoxValidationRes
         license_plate=request.license_plate,
         validation_id=validation.id,
         lineas=line_results,
+    )
+
+
+# ============================================================================
+# STOCK SEMANAL
+# ============================================================================
+
+def get_stock_semana(
+    year: str,
+    db: Session,
+    skip: int = 0,
+    limit: int = 1000,
+    week: Optional[str] = None,
+    almacen_id: Optional[str] = None,
+    articulo_id: Optional[str] = None,
+) -> StockSemanaListResponse:
+    """
+    Return weekly stock rows for a given year from tbdStockSemanaTotal.
+
+    Filters:
+        year       – required, e.g. '2026'
+        week       – optional, e.g. '10'
+        almacen_id – optional warehouse filter
+        articulo_id– optional article filter
+    """
+    query = db.query(StockSemanaTotal).filter(StockSemanaTotal.fldYear == year)
+
+    if week:
+        query = query.filter(StockSemanaTotal.fldWeek == week)
+    if almacen_id:
+        query = query.filter(StockSemanaTotal.fldIdAlmacen == almacen_id)
+    if articulo_id:
+        query = query.filter(StockSemanaTotal.fldIdArticulo == articulo_id)
+
+    total_count = query.count()
+    rows = (
+        query
+        .order_by(StockSemanaTotal.fldWeek, StockSemanaTotal.fldIdAlmacen, StockSemanaTotal.fldIdArticulo)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+    return StockSemanaListResponse(
+        year=year,
+        total_count=total_count,
+        skip=skip,
+        limit=limit,
+        items=rows,
     )
