@@ -3,7 +3,7 @@ Router para gestión de órdenes.
 """
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func, case
 from typing import List, Optional, Dict, Any
@@ -61,7 +61,8 @@ def list_orders(
     fecha_hasta: Optional[date] = Query(None, description="Filtrar órdenes hasta esta fecha (fecha_orden)"),
     type: Optional[str] = Query(None, description="Filtrar por tipo de orden"),
     codigo_operario: Optional[str] = Query(None, description="Filtrar por código de operario asignado"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    response: Response = None,
 ):
     """
     Lista todas las órdenes con información resumida.
@@ -77,43 +78,48 @@ def list_orders(
     - Estado
     - Almacén (opcional)
     """
-    # Query base - obtener instancias completas de Order con relaciones
-    query = db.query(Order).options(
-        joinedload(Order.status),
-        joinedload(Order.operator),
-        selectinload(Order.order_lines)  # selectinload es más eficiente con limit/offset para colecciones
-    )
-    
+    # Query base para filtrado (sin eager loading para que el COUNT sea eficiente)
+    query = db.query(Order)
+
     # Aplicar filtros opcionales
     if prioridad:
         query = query.filter(Order.prioridad == prioridad.upper())
-    
+
     if estado_codigo:
         query = query.join(OrderStatus).filter(OrderStatus.codigo == estado_codigo.upper())
-    
+
     if almacen_id:
         query = query.filter(Order.almacen_id == almacen_id)
-    
+
     if fecha_desde:
         query = query.filter(Order.fecha_orden >= fecha_desde)
-    
+
     if fecha_hasta:
         query = query.filter(Order.fecha_orden <= fecha_hasta)
-    
+
     if type:
         query = query.filter(Order.type == type)
-    
+
     if codigo_operario:
         query = query.join(Operator).filter(Operator.codigo == codigo_operario)
-    
-    # Ordenar por fecha de importación descendente (más recientes primero)
-    query = query.order_by(Order.fecha_importacion.desc())
-    
-    # Aplicar paginación
-    query = query.offset(skip).limit(limit)
-    
-    # Ejecutar query
-    results = query.all()
+
+    # Total real para paginación en el frontend
+    total = query.count()
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+
+    # Aplicar eager loading, orden y paginación para los resultados
+    results = (
+        query.options(
+            joinedload(Order.status),
+            joinedload(Order.operator),
+            selectinload(Order.order_lines),
+        )
+        .order_by(Order.fecha_importacion.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     
     # Transformar resultados a modelo Pydantic
     orders = []

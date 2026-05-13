@@ -74,11 +74,14 @@ app.add_middleware(
         "http://172.20.10.9:8081",  # Cliente PDA
         "http://192.168.1.13:8081",  # PDA LAN
         "http://192.168.1.13:19000",  # Expo Metro bundler LAN
+        "http://localhost:1717",
+        "http://127.0.0.1:1717",
         "http://82.223.131.45:1717",  # Production frontend server
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count"],
     max_age=600,
 )
 
