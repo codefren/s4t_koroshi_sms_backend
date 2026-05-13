@@ -5,7 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session, joinedload, selectinload
-from sqlalchemy import func, case
+from sqlalchemy import func
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 
@@ -168,43 +168,36 @@ def get_orders_stats(
     - fecha_desde: Filtrar órdenes desde esta fecha
     - fecha_hasta: Filtrar órdenes hasta esta fecha
     """
-    # Query base
-    query = db.query(Order).join(OrderStatus, Order.status_id == OrderStatus.id)
-    
-    # Aplicar filtros opcionales
+    # Una sola query GROUP BY status_code — usa el índice compuesto idx_status_fecha
+    filters = []
     if almacen_id:
-        query = query.filter(Order.almacen_id == almacen_id)
-    
+        filters.append(Order.almacen_id == almacen_id)
     if fecha_desde:
-        query = query.filter(Order.fecha_orden >= fecha_desde)
-    
+        filters.append(Order.fecha_orden >= fecha_desde)
     if fecha_hasta:
-        query = query.filter(Order.fecha_orden <= fecha_hasta)
-    
-    # Calcular estadísticas con agregación
-    stats = db.query(
-        func.count(Order.id).label('total'),
-        func.sum(case((OrderStatus.codigo == 'PENDING', 1), else_=0)).label('pending'),
-        func.sum(case((OrderStatus.codigo == 'ASSIGNED', 1), else_=0)).label('assigned'),
-        func.sum(case((OrderStatus.codigo == 'IN_PICKING', 1), else_=0)).label('in_picking'),
-        func.sum(case((OrderStatus.codigo == 'PICKED', 1), else_=0)).label('picked'),
-        func.sum(case((OrderStatus.codigo == 'PACKING', 1), else_=0)).label('packing'),
-        func.sum(case((OrderStatus.codigo == 'READY', 1), else_=0)).label('ready'),
-        func.sum(case((OrderStatus.codigo == 'SHIPPED', 1), else_=0)).label('shipped'),
-        func.sum(case((OrderStatus.codigo == 'CANCELLED', 1), else_=0)).label('cancelled')
-    ).select_from(query.subquery()).first()
-    
-    # Construir respuesta
+        filters.append(Order.fecha_orden <= fecha_hasta)
+
+    rows = (
+        db.query(OrderStatus.codigo, func.count(Order.id).label('cnt'))
+        .join(Order, Order.status_id == OrderStatus.id)
+        .filter(*filters)
+        .group_by(OrderStatus.codigo)
+        .all()
+    )
+
+    counts = {row.codigo: row.cnt for row in rows}
+    total = sum(counts.values())
+
     return OrderStatsResponse(
-        total=stats.total or 0,
-        pending=stats.pending or 0,
-        assigned=stats.assigned or 0,
-        in_picking=stats.in_picking or 0,
-        picked=stats.picked or 0,
-        packing=stats.packing or 0,
-        ready=stats.ready or 0,
-        shipped=stats.shipped or 0,
-        cancelled=stats.cancelled or 0
+        total=total,
+        pending=counts.get('PENDING', 0),
+        assigned=counts.get('ASSIGNED', 0),
+        in_picking=counts.get('IN_PICKING', 0),
+        picked=counts.get('PICKED', 0),
+        packing=counts.get('PACKING', 0),
+        ready=counts.get('READY', 0),
+        shipped=counts.get('SHIPPED', 0),
+        cancelled=counts.get('CANCELLED', 0),
     )
 
 
