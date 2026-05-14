@@ -1,7 +1,7 @@
 """
 Pydantic schemas for B2B API Service.
 """
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, List
 from datetime import datetime
 
@@ -431,6 +431,11 @@ class StockSemanaItem(BaseModel):
     stock: Optional[float] = Field(None, alias="fldStock")
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @field_validator('year', 'week', 'almacen_id', 'articulo_id', 'color_id', mode='before')
+    @classmethod
+    def coerce_to_str(cls, v):
+        return str(v) if v is not None else v
 
 
 class StockSemanaListResponse(BaseModel):

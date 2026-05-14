@@ -10,7 +10,7 @@ from typing import List, Optional
 import os
 
 from src.adapters.secondary.database.config import get_db, get_db_koroshi
-from src.adapters.secondary.database.orm import Customer, EAN, ProductReference as ProductReferenceORM
+from src.adapters.secondary.database.orm import Customer, EAN, ProductReference as ProductReferenceORM, StockSemanaTotal
 from sqlalchemy import func as sa_func
 from src.api_service.auth import verify_customer_api_key
 from src.api_service.schemas import (
@@ -662,6 +662,74 @@ def get_stock_weekly(
         week=week,
         almacen_id=almacen_id,
         articulo_id=articulo_id,
+    )
+
+
+@router.get(
+    "/stock/weekly/{year}/csv",
+    tags=["Stock"],
+    summary="Stock semanal por año como CSV",
+    response_class=StreamingResponse,
+    responses={
+        200: {"description": "CSV file download", "content": {"text/csv": {}}},
+    },
+)
+def download_stock_weekly_csv(
+    year: str,
+    week: Optional[str] = Query(None, description="Filtrar por semana, p.ej. '10'"),
+    almacen_id: Optional[str] = Query(None, description="Filtrar por almacén"),
+    articulo_id: Optional[str] = Query(None, description="Filtrar por artículo"),
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db_koroshi),
+):
+    """
+    Descarga el stock semanal del año indicado como **CSV**.
+
+    Aplica los mismos filtros opcionales que el endpoint JSON (`week`, `almacen_id`, `articulo_id`)
+    pero devuelve **todos los registros** sin paginación.
+
+    **Columnas:** `year`, `week`, `almacen_id`, `articulo_id`, `color_id`, `stock`
+
+    **Authentication:** Requires `X-Api-Key` header.
+
+    **Ejemplo:**
+    ```
+    curl -H "X-Api-Key: YOUR_API_KEY" \\
+         "http://localhost:8000/api/service/stock/weekly/2026/csv?week=10" \\
+         --output stock_2026_semana10.csv
+    ```
+    """
+    query = db.query(StockSemanaTotal).filter(StockSemanaTotal.fldYear == year)
+    if week:
+        query = query.filter(StockSemanaTotal.fldWeek == week)
+    if almacen_id:
+        query = query.filter(StockSemanaTotal.fldIdAlmacen == almacen_id)
+    if articulo_id:
+        query = query.filter(StockSemanaTotal.fldIdArticulo == articulo_id)
+
+    rows = (
+        query
+        .order_by(StockSemanaTotal.fldWeek, StockSemanaTotal.fldIdAlmacen, StockSemanaTotal.fldIdArticulo)
+        .all()
+    )
+
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(["year", "week", "almacen_id", "articulo_id", "color_id", "stock"])
+    for r in rows:
+        writer.writerow([r.fldYear, r.fldWeek, r.fldIdAlmacen, r.fldIdArticulo, r.fldIdColor, r.fldStock if r.fldStock is not None else ""])
+
+    output.seek(0)
+    suffix = f"_semana{week}" if week else ""
+    filename = f"stock_{year}{suffix}.csv"
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Total-Count": str(len(rows)),
+        },
     )
 
 
