@@ -3,6 +3,7 @@ FastAPI routes for B2B Customer API Service.
 """
 import csv
 import io
+import logging
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -35,6 +36,7 @@ from src.api_service.schemas import (
     BoxValidationRequest,
     BoxValidationResponse,
     StockSemanaListResponse,
+    StockSemanaAlmacenesResponse,
 )
 from src.api_service.service import (
     get_customer_b2b_orders,
@@ -55,6 +57,8 @@ from src.api_service.service import (
     get_stock_semana,
 )
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -596,6 +600,27 @@ def health_check():
 # ─── Stock Semanal ────────────────────────────────────────────────────────────
 
 @router.get(
+    "/stock/almacenes",
+    response_model=StockSemanaAlmacenesResponse,
+    tags=["Stock"],
+    summary="Lista de almacenes con registros de stock semanal",
+)
+def get_stock_weekly_almacenes(
+    customer: Customer = Depends(verify_customer_api_key),
+    db: Session = Depends(get_db_koroshi),
+):
+    """
+    Devuelve la lista de almacenes distintos que tienen registros en `tbdStockSemanaTotal`.
+
+    **Authentication:** Requires `X-Api-Key` header.
+    """
+    from sqlalchemy import distinct
+    rows = db.query(distinct(StockSemanaTotal.fldIdAlmacen)).order_by(StockSemanaTotal.fldIdAlmacen).all()
+    almacenes = [str(r[0]) for r in rows if r[0] is not None]
+    return StockSemanaAlmacenesResponse(almacenes=almacenes, total=len(almacenes))
+
+
+@router.get(
     "/stock/weekly/{year}",
     response_model=StockSemanaListResponse,
     tags=["Stock"],
@@ -699,19 +724,30 @@ def download_stock_weekly_csv(
          --output stock_2026_semana10.csv
     ```
     """
+    logger.info(
+        "CSV stock semanal solicitado | customer=%s year=%s week=%s almacen_id=%s articulo_id=%s",
+        customer.fldNameCustomer if hasattr(customer, "fldNameCustomer") else customer,
+        year, week, almacen_id, articulo_id,
+    )
+
     query = db.query(StockSemanaTotal).filter(StockSemanaTotal.fldYear == year)
     if week:
         query = query.filter(StockSemanaTotal.fldWeek == week)
+        logger.debug("Filtro aplicado: week=%s", week)
     if almacen_id:
         query = query.filter(StockSemanaTotal.fldIdAlmacen == almacen_id)
+        logger.debug("Filtro aplicado: almacen_id=%s", almacen_id)
     if articulo_id:
         query = query.filter(StockSemanaTotal.fldIdArticulo == articulo_id)
+        logger.debug("Filtro aplicado: articulo_id=%s", articulo_id)
 
+    logger.debug("Ejecutando consulta a tbdStockSemanaTotal para year=%s", year)
     rows = (
         query
         .order_by(StockSemanaTotal.fldWeek, StockSemanaTotal.fldIdAlmacen, StockSemanaTotal.fldIdArticulo)
         .all()
     )
+    logger.info("Consulta completada | total_filas=%d year=%s week=%s", len(rows), year, week)
 
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
@@ -722,6 +758,8 @@ def download_stock_weekly_csv(
     output.seek(0)
     suffix = f"_semana{week}" if week else ""
     filename = f"stock_{year}{suffix}.csv"
+
+    logger.info("CSV generado | archivo=%s filas=%d", filename, len(rows))
 
     return StreamingResponse(
         iter([output.getvalue()]),

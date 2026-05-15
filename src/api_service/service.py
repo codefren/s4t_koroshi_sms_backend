@@ -934,12 +934,14 @@ def batch_update_picked_order(
         logger.info(f"Order {order_number} marked as READY after successful external API response")
 
         # 9. Send expedition to XPO
-        fecha_now = datetime.now()
-        total_cajas    = len({l.box_code for l in lines_updates if l.box_code})
-        total_unidades = sum(l.quantity_served for l in lines_updates if l.quantity_served > 0)
-        logger.info(f"total_cajas={total_cajas}, total_unidades={total_unidades}")
+        fecha_now  = datetime.now()
+        api_data   = external_api_response.get('data', {}) if isinstance(external_api_response, dict) else {}
+        packing_id = api_data.get('packingId') or order.numero_orden
+        total_cajas    = api_data.get('totalBultos') or len({l.box_code for l in lines_updates if l.box_code}) or 1
+        total_unidades = api_data.get('totalUnidades') or sum(l.quantity_served for l in lines_updates if l.quantity_served > 0)
+        logger.info(f"packing_id={packing_id}, total_cajas={total_cajas}, total_unidades={total_unidades}")
 
-        erp = get_packing_info(order.numero_orden, num_cajas=total_cajas if total_cajas > 0 else 1)
+        erp = get_packing_info(packing_id, num_cajas=total_cajas)
 
         xpo_params = XpoExpedicionParams(
             dest_nombre    = (erp.nombre    if erp else None) or order.nombre_cliente or "",
@@ -951,10 +953,10 @@ def batch_update_picked_order(
             dest_movil     = (erp.telefono  if erp else None) or "",
             dest_email     = (erp.email     if erp else None) or "",
             dest_cod_tienda= (erp.cod_tienda if erp else None) or "",
-            obs_linea1        = f"{order.nombre_cliente or ''} / PACKING / {order.numero_orden}",
-            referencia        = f"{order.numero_pedido or ''} - {fecha_now.strftime('%Y%m%d')}",
+            obs_linea1        = f"{order.nombre_cliente or ''} / PACKING / {packing_id}",
+            referencia        = f"{packing_id} - {fecha_now.strftime('%Y%m%d')}",
             fecha_expedicion  = fecha_now,
-            total_cajas    = total_cajas if total_cajas > 0 else 1,
+            total_cajas    = total_cajas,
             tipo_caja      = "5",
             total_unidades = total_unidades,
             peso_neto      = erp.peso_neto    if erp else 0.0,
@@ -1662,16 +1664,26 @@ def get_stock_semana(
         almacen_id – optional warehouse filter
         articulo_id– optional article filter
     """
+    logger.info(
+        "get_stock_semana | year=%s week=%s almacen_id=%s articulo_id=%s skip=%d limit=%d",
+        year, week, almacen_id, articulo_id, skip, limit,
+    )
+
     query = db.query(StockSemanaTotal).filter(StockSemanaTotal.fldYear == year)
 
     if week:
         query = query.filter(StockSemanaTotal.fldWeek == week)
+        logger.debug("Filtro aplicado: week=%s", week)
     if almacen_id:
         query = query.filter(StockSemanaTotal.fldIdAlmacen == almacen_id)
+        logger.debug("Filtro aplicado: almacen_id=%s", almacen_id)
     if articulo_id:
         query = query.filter(StockSemanaTotal.fldIdArticulo == articulo_id)
+        logger.debug("Filtro aplicado: articulo_id=%s", articulo_id)
 
     total_count = query.count()
+    logger.info("Total registros encontrados: %d (year=%s week=%s)", total_count, year, week)
+
     rows = (
         query
         .order_by(StockSemanaTotal.fldWeek, StockSemanaTotal.fldIdAlmacen, StockSemanaTotal.fldIdArticulo)
@@ -1679,6 +1691,7 @@ def get_stock_semana(
         .limit(limit)
         .all()
     )
+    logger.info("Filas retornadas: %d (skip=%d limit=%d)", len(rows), skip, limit)
 
     return StockSemanaListResponse(
         year=year,

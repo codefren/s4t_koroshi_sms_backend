@@ -445,3 +445,9 @@ class StockSemanaListResponse(BaseModel):
     skip: int
     limit: int
     items: List[StockSemanaItem]
+
+
+class StockSemanaAlmacenesResponse(BaseModel):
+    """Distinct list of almacen IDs present in weekly stock table"""
+    almacenes: List[str]
+    total: int
